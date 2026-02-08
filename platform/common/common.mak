@@ -135,7 +135,7 @@ endif
 ifeq "$(use_musashi)" "1"
 DEFINES += EMU_M68K
 SRCS_COMMON += $(R)cpu/musashi/m68kops.c $(R)cpu/musashi/m68kcpu.c
-#SRCS_COMMON += $(R)cpu/musashi/m68kdasm.c
+SRCS_COMMON += $(R)cpu/musashi/m68kdasm.c
 endif
 ifeq "$(use_cyclone)" "1"
 DEFINES += EMU_C68K

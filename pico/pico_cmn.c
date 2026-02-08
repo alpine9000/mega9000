@@ -16,6 +16,13 @@
   SekRunM68k(m68k_cycles)
 #endif
 
+#ifdef __LIBRETRO__
+extern int e9k_debug_should_break_now(void);
+#define E9K_DEBUG_BREAK_NOW() e9k_debug_should_break_now()
+#else
+#define E9K_DEBUG_BREAK_NOW() 0
+#endif
+
 // sync m68k to Pico.t.m68c_aim
 static void SekExecM68k(int cyc_do)
 {
@@ -187,6 +194,10 @@ static int PicoFrameHints(void)
 
     if (PicoLineHook) PicoLineHook();
     pevt_log_m68k_o(EVT_NEXT_LINE);
+    if (E9K_DEBUG_BREAK_NOW()) {
+      pv->hint_cnt = hint;
+      return 0;
+    }
   }
 
   SyncCPUs(Pico.t.m68c_aim);
@@ -271,6 +282,10 @@ static int PicoFrameHints(void)
 
   if (PicoLineHook) PicoLineHook();
   pevt_log_m68k_o(EVT_NEXT_LINE);
+  if (E9K_DEBUG_BREAK_NOW()) {
+    pv->hint_cnt = hint;
+    return 0;
+  }
 
   if (Pico.m.z80Run && !Pico.m.z80_reset && (PicoIn.opt&POPT_EN_Z80))
     PicoSyncZ80(Pico.t.m68c_aim);
@@ -299,6 +314,10 @@ static int PicoFrameHints(void)
 
     if (PicoLineHook) PicoLineHook();
     pevt_log_m68k_o(EVT_NEXT_LINE);
+    if (E9K_DEBUG_BREAK_NOW()) {
+      pv->hint_cnt = hint;
+      return 0;
+    }
   }
 
   if (unlikely(PicoIn.overclockM68k)) {
@@ -308,6 +327,10 @@ static int PicoFrameHints(void)
       do_timing_hacks_start(pv);
       SekSyncM68k(0);
       do_timing_hacks_end(pv);
+      if (E9K_DEBUG_BREAK_NOW()) {
+        pv->hint_cnt = hint;
+        return 0;
+      }
     }
   }
 
@@ -342,6 +365,10 @@ static int PicoFrameHints(void)
 
   if (PicoLineHook) PicoLineHook();
   pevt_log_m68k_o(EVT_NEXT_LINE);
+  if (E9K_DEBUG_BREAK_NOW()) {
+    pv->hint_cnt = hint;
+    return 0;
+  }
 
   SyncCPUs(Pico.t.m68c_aim);
 
