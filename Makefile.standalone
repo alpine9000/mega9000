@@ -3,6 +3,8 @@ TARGET ?= picodrive
 ASAN ?= 0
 DEBUG ?= 0
 CFLAGS += -I.
+OBJDIR ?=
+objpath = $(if $(OBJDIR),$(OBJDIR)/$1,$1)
 CYCLONE_CC ?= gcc
 CYCLONE_CXX ?= g++
 
@@ -337,9 +339,9 @@ TREMOR_OBJS += $(TREMOR)/block.o $(TREMOR)/codebook.o $(TREMOR)/floor0.o $(TREMO
 TREMOR_OBJS += $(TREMOR)/info.o $(TREMOR)/mapping0.o $(TREMOR)/mdct.o $(TREMOR)/registry.o
 TREMOR_OBJS += $(TREMOR)/res012.o $(TREMOR)/sharedbook.o $(TREMOR)/synthesis.o $(TREMOR)/window.o
 TREMOR_OBJS += $(TREMOR)/vorbisfile.o $(TREMOR)/framing.o $(TREMOR)/bitwise.o
-$(TREMOR_OBJS) platform/common/ogg.o: CFLAGS += -I$(TREMOR) -DUSE_TREMOR
+$(foreach objectFile,$(TREMOR_OBJS),$(call objpath,$(objectFile))) $(call objpath,platform/common/ogg.o): CFLAGS += -I$(TREMOR) -DUSE_TREMOR
 # API conflict between libvorbis and libvorbisidec (aka tremor) when compiling for retroarch
-$(TREMOR_OBJS): CFLAGS += $(call chkCCflag, -fvisibility=hidden)
+$(foreach objectFile,$(TREMOR_OBJS),$(call objpath,$(objectFile))): CFLAGS += $(call chkCCflag, -fvisibility=hidden)
 OBJS += $(TREMOR_OBJS)
 else
 LDLIBS += -lvorbisfile -lvorbis -logg
@@ -358,7 +360,7 @@ LZMA = $(CHDR)/deps/lzma-24.05
 LZMA_OBJS += $(LZMA)/src/CpuArch.o $(LZMA)/src/Alloc.o $(LZMA)/src/LzmaEnc.o
 LZMA_OBJS += $(LZMA)/src/Sort.o $(LZMA)/src/LzmaDec.o $(LZMA)/src/LzFind.o
 LZMA_OBJS += $(LZMA)/src/Delta.o
-$(LZMA_OBJS): CFLAGS += -DZ7_ST -Wno-unused
+$(foreach objectFile,$(LZMA_OBJS),$(call objpath,$(objectFile))): CFLAGS += -DZ7_ST -Wno-unused
 
 ZSTD = $(CHDR)/deps/zstd-1.5.6/lib
 ZSTD_OBJS += $(ZSTD)/common/entropy_common.o $(ZSTD)/common/error_private.o
@@ -371,7 +373,7 @@ endif
 ZSTD_OBJS += $(ZSTD)/decompress/zstd_ddict.o
 ZSTD_OBJS += $(ZSTD)/decompress/zstd_decompress_block.o
 ZSTD_OBJS += $(ZSTD)/decompress/zstd_decompress.o
-$(ZSTD_OBJS) $(CHDR_OBJS): CFLAGS += -I$(ZSTD) -Wno-unused
+$(foreach objectFile,$(ZSTD_OBJS) $(CHDR_OBJS),$(call objpath,$(objectFile))): CFLAGS += -I$(ZSTD) -Wno-unused
 
 OBJS += $(CHDR_OBJS) $(ZSTD_OBJS)
 ifneq ($(STATIC_LINKING), 1)
@@ -397,6 +399,11 @@ include platform/common/common.mak
 OBJS += $(OBJS_COMMON)
 CFLAGS += $(addprefix -D,$(DEFINES))
 
+OBJS := $(foreach objectFile,$(OBJS),$(call objpath,$(objectFile)))
+ifneq ($(OBJDIR),)
+TARGET := $(OBJDIR)/$(notdir $(TARGET))
+endif
+
 ifneq (,$(findstring sdl,$(OBJS)))
 CFLAGS += -DUSE_SDL
 endif
@@ -421,6 +428,7 @@ clean:
 	$(RM) -r .od_data
 
 $(TARGET): $(OBJS)
+	@mkdir -p $(dir $@)
 
 ifeq ($(STATIC_LINKING_LINK), 1)
 	$(AR) rcs $@ $^
@@ -445,31 +453,34 @@ pprof: platform/linux/pprof.c
 pico/pico_int_offs.h: tools/mkoffsets.sh
 	make -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS) -UUSE_LIBRETRO_VFS" XPLATFORM="$(platform)"
 
-%.o: %.c
+$(call objpath,%.o): %.c
+	@mkdir -p $(dir $@)
 	$(CC) -c $(OBJOUT)$@ $< $(CFLAGS)
 
-.s.o:
+$(call objpath,%.o): %.s
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-.S.o:
+$(call objpath,%.o): %.S
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # special flags - perhaps fix this someday instead?
-pico/draw.o: CFLAGS += -fno-strict-aliasing
-pico/draw2.o: CFLAGS += -fno-strict-aliasing
-pico/mode4.o: CFLAGS += -fno-strict-aliasing
-pico/cd/memory.o: CFLAGS += -fno-strict-aliasing
-pico/cd/cd_file.o: CFLAGS += -fno-strict-aliasing
-pico/cd/pcm.o: CFLAGS += -fno-strict-aliasing
-pico/cd/LC89510.o: CFLAGS += -fno-strict-aliasing
-pico/cd/gfx_cd.o: CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/draw.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/draw2.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/mode4.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/cd/memory.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/cd/cd_file.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/cd/pcm.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/cd/LC89510.o): CFLAGS += -fno-strict-aliasing
+$(call objpath,pico/cd/gfx_cd.o): CFLAGS += -fno-strict-aliasing
 ifeq (1,$(use_sh2drc))
 ifneq (,$(findstring -flto,$(CFLAGS)))
 # if using the DRC, memory and sh2soc directly use the DRC register for SH2 SR
 # to avoid saving and reloading it. However, this collides with the use of LTO.
-pico/32x/memory.o: CFLAGS += -fno-lto
-pico/32x/sh2soc.o: CFLAGS += -fno-lto
-cpu/sh2/compiler.o: CFLAGS += -fno-lto
+$(call objpath,pico/32x/memory.o): CFLAGS += -fno-lto
+$(call objpath,pico/32x/sh2soc.o): CFLAGS += -fno-lto
+$(call objpath,cpu/sh2/compiler.o): CFLAGS += -fno-lto
 endif
 ifneq (,$(filter mips64%, $(ARCH))$(filter %mips32r2, $(CFLAGS)))
 CFLAGS += -DMIPS_USE_SYNCI # mips32r2 clear_cache uses SYNCI instead of a syscall
@@ -482,9 +493,9 @@ endif
 # want to remove this stuff for better performance if your compiler can handle it
 ifeq "$(DEBUG)" "0"
 ifeq (,$(findstring msvc,$(platform)))
-cpu/fame/famec.o: CFLAGS += -g0 -O2 -fno-expensive-optimizations
+$(call objpath,cpu/fame/famec.o): CFLAGS += -g0 -O2 -fno-expensive-optimizations
 else
-cpu/fame/famec.o: CFLAGS += -Od
+$(call objpath,cpu/fame/famec.o): CFLAGS += -Od
 endif
 endif
 
@@ -497,13 +508,13 @@ pico/carthw_cfg.c: pico/carthw.cfg tools/make_carthw_c
 $(filter %.S,$(SRCS_COMMON)): pico/pico_int_offs.h
 
 # random deps - TODO remove this and compute dependcies automatically
-pico/carthw/svp/compiler.o : cpu/drc/emit_arm.c
-cpu/sh2/compiler.o : cpu/drc/emit_arm.c cpu/drc/emit_arm64.c cpu/drc/emit_ppc.c
-cpu/sh2/compiler.o : cpu/drc/emit_x86.c cpu/drc/emit_mips.c cpu/drc/emit_riscv.c
-cpu/sh2/mame/sh2pico.o : cpu/sh2/mame/sh2.c
-pico/pico.o pico/cd/mcd.o pico/32x/32x.o : pico/pico_cmn.c
-pico/memory.o pico/cd/memory.o pico/32x/memory.o : pico/memory.h
-$(shell grep -rl pico_int.h pico) : pico/pico_int.h
+$(call objpath,pico/carthw/svp/compiler.o) : cpu/drc/emit_arm.c
+$(call objpath,cpu/sh2/compiler.o) : cpu/drc/emit_arm.c cpu/drc/emit_arm64.c cpu/drc/emit_ppc.c
+$(call objpath,cpu/sh2/compiler.o) : cpu/drc/emit_x86.c cpu/drc/emit_mips.c cpu/drc/emit_riscv.c
+$(call objpath,cpu/sh2/mame/sh2pico.o) : cpu/sh2/mame/sh2.c
+$(call objpath,pico/pico.o) $(call objpath,pico/cd/mcd.o) $(call objpath,pico/32x/32x.o) : pico/pico_cmn.c
+$(call objpath,pico/memory.o) $(call objpath,pico/cd/memory.o) $(call objpath,pico/32x/memory.o) : pico/memory.h
+$(foreach sourceFile,$(shell grep -rl pico_int.h pico),$(call objpath,$(sourceFile:.c=.o))) : pico/pico_int.h
 # pico/cart.o : pico/carthw_cfg.c
-cpu/fame/famec.o: cpu/fame/famec.c cpu/fame/famec_opcodes.h
-platform/common/menu_pico.o: platform/libpicofe/menu.c
+$(call objpath,cpu/fame/famec.o): cpu/fame/famec.c cpu/fame/famec_opcodes.h
+$(call objpath,platform/common/menu_pico.o): platform/libpicofe/menu.c

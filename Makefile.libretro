@@ -612,6 +612,7 @@ else
 	fpic := -fPIC
 	SHARED := -shared -static-libgcc -static-libstdc++
 	CFLAGS += -D__WIN32__ -D__WIN32_LIBRETRO__
+	PLATFORM_TREMOR ?= 1
 
 endif
 
@@ -730,14 +731,21 @@ NO_VORBIS_HEADER := $(shell echo '\#include <vorbis/vorbisfile.h>' | \
 	echo 0 || echo 1)
 PLATFORM_TREMOR ?= $(NO_VORBIS_HEADER)
 PLATFORM_ZLIB ?= 1
+ifneq (,$(findstring win,$(platform)))
+E9K_BUILD_FLAVOR ?= w64
+else
+E9K_BUILD_FLAVOR ?= posix
+endif
+OBJDIR ?= build/$(E9K_BUILD_FLAVOR)
 
 include Makefile.standalone
 
 ifeq ($(platform), osx)
-pico/cd/libchdr/src/libchdr_chd.o: CFLAGS += -D__MACTYPES__=1
+$(call objpath,pico/cd/libchdr/src/libchdr_chd.o): CFLAGS += -D__MACTYPES__=1
 endif
 
-E9K_MEGADRIVE_CORE_DST ?= ../e9k-debugger/system/mega9000.dylib
+E9K_MEGADRIVE_CORE_EXT ?= $(suffix $(TARGET))
+E9K_MEGADRIVE_CORE_DST ?= ../e9k-debugger/system/mega9000$(E9K_MEGADRIVE_CORE_EXT)
 
 .PHONY: e9k_copy_core
 e9k_copy_core: $(TARGET)
