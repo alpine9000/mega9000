@@ -98,8 +98,21 @@ static void *e9k_debug_vblankUser;
 static int e9k_debug_paused;
 static int e9k_debug_breakNow;
 static int e9k_debug_stepInstr;
+static int e9k_debug_breakpointHitLatched;
+static uint32_t e9k_debug_breakpointHitAddr;
 static uint32_t e9k_debug_breakpoints[64];
 static size_t e9k_debug_breakpointCount;
+
+static void
+e9k_debug_reset_state(void)
+{
+   e9k_debug_paused = 0;
+   e9k_debug_breakNow = 0;
+   e9k_debug_stepInstr = 0;
+   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_breakpointHitAddr = 0;
+   e9k_debug_breakpointCount = 0;
+}
 
 #ifdef EMU_M68K
 unsigned int
@@ -210,12 +223,15 @@ e9k_debug_instruction_hook(unsigned int pc)
       e9k_debug_stepInstr = 0;
       e9k_debug_paused = 1;
       e9k_debug_breakNow = 1;
+      e9k_debug_breakpointHitLatched = 0;
       m68k_end_timeslice();
       return;
    }
    if (e9k_debug_has_breakpoint(pc24)) {
       e9k_debug_paused = 1;
       e9k_debug_breakNow = 1;
+      e9k_debug_breakpointHitLatched = 1;
+      e9k_debug_breakpointHitAddr = pc24;
       m68k_end_timeslice();
       return;
    }
@@ -229,6 +245,7 @@ e9k_debug_pause(void)
 {
    e9k_debug_paused = 1;
    e9k_debug_breakNow = 1;
+   e9k_debug_breakpointHitLatched = 0;
 }
 
 RETRO_API void
@@ -237,6 +254,7 @@ e9k_debug_resume(void)
    e9k_debug_paused = 0;
    e9k_debug_breakNow = 0;
    e9k_debug_stepInstr = 0;
+   e9k_debug_breakpointHitLatched = 0;
 }
 
 RETRO_API int
@@ -251,6 +269,7 @@ e9k_debug_step_instr(void)
    e9k_debug_paused = 0;
    e9k_debug_breakNow = 0;
    e9k_debug_stepInstr = 1;
+   e9k_debug_breakpointHitLatched = 0;
 }
 
 RETRO_API void
@@ -310,6 +329,12 @@ e9k_debug_remove_temp_breakpoint(uint32_t addr)
    e9k_debug_remove_breakpoint(addr);
 }
 
+RETRO_API void
+e9k_debug_clear_breakpoints(void)
+{
+   e9k_debug_breakpointCount = 0;
+}
+
 RETRO_API size_t
 e9k_debug_read_regs(uint32_t *out, size_t cap)
 {
@@ -335,6 +360,9 @@ e9k_debug_read_regs(uint32_t *out, size_t cap)
       if (regs[i] == M68K_REG_SR) {
          value &= 0x0000ffffu;
       }
+      if (regs[i] == M68K_REG_PC && e9k_debug_paused && e9k_debug_breakpointHitLatched) {
+         value = e9k_debug_breakpointHitAddr;
+      }
       out[i] = value;
    }
    return count;
@@ -348,6 +376,7 @@ e9k_debug_read_regs(uint32_t *out, size_t cap)
 RETRO_API size_t
 e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
 {
+#ifdef EMU_M68K
    size_t i;
    if (!out || cap == 0) {
       return 0;
@@ -356,11 +385,18 @@ e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
       out[i] = (uint8_t)m68k_read_memory_8(e9k_debug_mask_addr(addr + (uint32_t)i));
    }
    return cap;
+#else
+   (void)addr;
+   (void)out;
+   (void)cap;
+   return 0;
+#endif
 }
 
 RETRO_API int
 e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
 {
+#ifdef EMU_M68K
    addr = e9k_debug_mask_addr(addr);
    if (size == 1) {
       m68k_write_memory_8(addr, value & 0xffu);
@@ -375,6 +411,12 @@ e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
       return 1;
    }
    return 0;
+#else
+   (void)addr;
+   (void)value;
+   (void)size;
+   return 0;
+#endif
 }
 
 RETRO_API size_t
@@ -1689,6 +1731,8 @@ bool retro_load_game(const struct retro_game_info *info)
    unsigned int cd_index = 0;
    bool is_m3u           = false;
 
+   e9k_debug_reset_state();
+
    struct retro_input_descriptor desc[] = {
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "D-Pad Left" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "D-Pad Up" },
@@ -1961,6 +2005,7 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *i
 
 void retro_unload_game(void)
 {
+    e9k_debug_reset_state();
     libretro_mem_AHW = 0;
 }
 
@@ -2052,6 +2097,7 @@ size_t retro_get_memory_size(unsigned type)
 
 void retro_reset(void)
 {
+   e9k_debug_reset_state();
    PicoReset();
 }
 

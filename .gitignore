@@ -37,3 +37,5 @@ PicoDrive*.zip
 pico_int_offs.h
 amalgamate
 textfilter
+cpu/musashi/m68kmake.exe
+cpu/musashi/m68kmake

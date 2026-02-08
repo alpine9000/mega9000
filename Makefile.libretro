@@ -627,7 +627,8 @@ endif
 
 ifeq ($(NO_ARM_ASM),1)
 use_cyclone = 0
-use_fame = 1
+use_musashi = 1
+use_fame = 0
 use_drz80 = 0
 use_cz80 = 1
 use_svpdrc = 0
@@ -663,6 +664,10 @@ ARCH = $(shell $(CC) $(CFLAGS) -dumpmachine | awk -F '-' '{print $$1}')
 endif
 PLATFORM = libretro
 NO_CONFIG_MAK = yes
+
+# e9k debugger integration currently targets the Musashi 68k backend.
+override use_musashi := 1
+override use_fame := 0
 
 OBJOUT   = -o
 LINKOUT  = -o 
@@ -726,7 +731,7 @@ NO_VORBIS_HEADER := $(shell echo '\#include <vorbis/vorbisfile.h>' | \
 PLATFORM_TREMOR ?= $(NO_VORBIS_HEADER)
 PLATFORM_ZLIB ?= 1
 
-include Makefile
+include Makefile.standalone
 
 ifeq ($(platform), osx)
 pico/cd/libchdr/src/libchdr_chd.o: CFLAGS += -D__MACTYPES__=1
