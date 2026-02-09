@@ -199,15 +199,15 @@ $(FR)cpu/cyclone/Cyclone.h:
 	@echo "Cyclone submodule is missing, please run 'git submodule update --init'"
 	@false
 
-	$(FR)cpu/cyclone/Cyclone.s: $(FR)cpu/$(CYCLONE_CONFIG)
-		@echo building Cyclone...
-		@export CC=$(CYCLONE_CC) CXX=$(CYCLONE_CXX) CFLAGS=-O2 CXXFLAGS=-O2 CPPFLAGS="" LDFLAGS="" && \
-			$(MAKE) -C $(R)cpu/cyclone/ CONFIG_FILE=../$(CYCLONE_CONFIG) HAVE_ARMv6=$(HAVE_ARMv6)
+$(FR)cpu/cyclone/Cyclone.s: $(FR)cpu/$(CYCLONE_CONFIG)
+	@echo building Cyclone...
+	@export CC=$(CYCLONE_CC) CXX=$(CYCLONE_CXX) CFLAGS=-O2 CXXFLAGS=-O2 CPPFLAGS="" LDFLAGS="" && \
+		$(MAKE) -C $(R)cpu/cyclone/ CONFIG_FILE=../$(CYCLONE_CONFIG) HAVE_ARMv6=$(HAVE_ARMv6)
 
 $(FR)cpu/cyclone/Cyclone.s: $(FR)cpu/cyclone/*.cpp $(FR)cpu/cyclone/*.h
 
-	$(FR)cpu/musashi/m68kops.c: $(FR)cpu/musashi/m68k_in.c
-		@$(MAKE) -C $(R)cpu/musashi
+$(FR)cpu/musashi/m68kops.c: $(FR)cpu/musashi/m68k_in.c
+	@$(MAKE) -C $(R)cpu/musashi
 $(FR)cpu/musashi/m68kcpu.c: $(FR)cpu/musashi/m68kops.c
 
 deps_set = yes
