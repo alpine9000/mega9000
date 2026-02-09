@@ -451,7 +451,7 @@ pprof: platform/linux/pprof.c
 	$(CC) $(CFLAGS) -O2 -ggdb -DPPROF -DPPROF_TOOL -I../../ -I. $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 pico/pico_int_offs.h: tools/mkoffsets.sh
-	make -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS) -UUSE_LIBRETRO_VFS" XPLATFORM="$(platform)"
+	$(MAKE) -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS) -UUSE_LIBRETRO_VFS" XPLATFORM="$(platform)"
 
 $(call objpath,%.o): %.c
 	@mkdir -p $(dir $@)
@@ -500,7 +500,7 @@ endif
 endif
 
 tools/make_carthw_c:
-	make -C tools make_carthw_c
+	$(MAKE) -C tools make_carthw_c
 pico/carthw_cfg.c: pico/carthw.cfg tools/make_carthw_c
 	tools/make_carthw_c $< $@
 
