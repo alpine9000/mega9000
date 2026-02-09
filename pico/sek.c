@@ -566,11 +566,11 @@ breakloop:
 #endif // CPU_CMP_*
 
 #if defined(EMU_M68K) && M68K_INSTRUCTION_HOOK == OPT_SPECIFY_HANDLER
-extern void e9k_debug_instruction_hook(unsigned int pc);
+extern void e9k_debug_instruction_hook(unsigned int pc, unsigned int opcode);
 
 void instruction_hook(void)
 {
-  e9k_debug_instruction_hook(REG_PC);
+  e9k_debug_instruction_hook(REG_PC, REG_IR);
 }
 #endif
 

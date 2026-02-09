@@ -95,20 +95,56 @@ static retro_environment_t environ_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static void (*e9k_debug_vblankCb)(void *);
 static void *e9k_debug_vblankUser;
+#define E9K_DEBUG_CALLSTACK_MAX 256
 static int e9k_debug_paused;
 static int e9k_debug_breakNow;
+static uint32_t e9k_debug_callstack[E9K_DEBUG_CALLSTACK_MAX];
+static size_t e9k_debug_callstackDepth;
 static int e9k_debug_stepInstr;
+static int e9k_debug_stepInstrAfter;
+static int e9k_debug_stepLine;
+static int e9k_debug_stepLineHasStart;
+static uint64_t e9k_debug_stepLineStart;
+static int e9k_debug_stepNext;
+static size_t e9k_debug_stepNextDepth;
+static int e9k_debug_stepNextSkipOnce;
+static int e9k_debug_stepNextReturnPcValid;
+static uint32_t e9k_debug_stepNextReturnPc;
+static int e9k_debug_stepOut;
+static size_t e9k_debug_stepOutDepth;
+static int e9k_debug_stepOutSkipOnce;
+static int e9k_debug_stepIntoPending;
+static int e9k_debug_skipBreakpointOnce;
+static uint32_t e9k_debug_skipBreakpointPc;
 static int e9k_debug_breakpointHitLatched;
 static uint32_t e9k_debug_breakpointHitAddr;
 static uint32_t e9k_debug_breakpoints[64];
 static size_t e9k_debug_breakpointCount;
+static int (*e9k_debug_sourceLocationResolver)(uint32_t pc24, uint64_t *out_location, void *user);
+static void *e9k_debug_sourceLocationResolverUser;
 
 static void
 e9k_debug_reset_state(void)
 {
    e9k_debug_paused = 0;
    e9k_debug_breakNow = 0;
+   e9k_debug_callstackDepth = 0;
    e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 0;
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_skipBreakpointOnce = 0;
+   e9k_debug_skipBreakpointPc = 0;
    e9k_debug_breakpointHitLatched = 0;
    e9k_debug_breakpointHitAddr = 0;
    e9k_debug_breakpointCount = 0;
@@ -203,6 +239,84 @@ e9k_debug_has_breakpoint(uint32_t pc24)
    return 0;
 }
 
+static void
+e9k_debug_request_break(void)
+{
+   e9k_debug_paused = 1;
+   e9k_debug_breakNow = 1;
+   e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 0;
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_breakpointHitLatched = 0;
+#ifdef EMU_M68K
+   m68k_end_timeslice();
+#endif
+}
+
+static int
+e9k_debug_resolve_source_location(uint32_t pc24, uint64_t *outLocation)
+{
+   if (!outLocation) {
+      return 0;
+   }
+   *outLocation = 0;
+   if (!e9k_debug_sourceLocationResolver) {
+      return 0;
+   }
+   return e9k_debug_sourceLocationResolver(pc24 & 0x00ffffffu, outLocation, e9k_debug_sourceLocationResolverUser) ? 1 : 0;
+}
+
+static int
+e9k_debug_try_get_call_return_pc(uint32_t pc24, uint16_t opcode, uint32_t *outReturnPc)
+{
+   if (!outReturnPc) {
+      return 0;
+   }
+   if ((opcode & 0xFFC0u) == 0x4E80u) {
+      int mode = (opcode >> 3) & 7;
+      int reg = opcode & 7;
+      uint32_t ext = 0;
+      if (mode == 5 || mode == 6) {
+         ext = 2;
+      } else if (mode == 7) {
+         if (reg == 0 || reg == 2 || reg == 3) {
+            ext = 2;
+         } else if (reg == 1) {
+            ext = 4;
+         } else {
+            return 0;
+         }
+      } else if (mode < 2) {
+         return 0;
+      }
+      *outReturnPc = (pc24 + 2u + ext) & 0x00ffffffu;
+      return 1;
+   }
+   if ((opcode & 0xFF00u) == 0x6100u) {
+      uint32_t disp8 = opcode & 0x00ffu;
+      uint32_t len = 2u;
+      if (disp8 == 0u) {
+         len = 4u;
+      } else if (disp8 == 0xffu) {
+         len = 6u;
+      }
+      *outReturnPc = (pc24 + len) & 0x00ffffffu;
+      return 1;
+   }
+   return 0;
+}
+
 int
 e9k_debug_should_break_now(void)
 {
@@ -210,42 +324,122 @@ e9k_debug_should_break_now(void)
 }
 
 void
-e9k_debug_instruction_hook(unsigned int pc)
+e9k_debug_instruction_hook(unsigned int pc, unsigned int opcodeIn)
 {
 #ifdef EMU_M68K
    uint32_t pc24 = e9k_debug_mask_addr((uint32_t)pc);
+   uint16_t opcode = (uint16_t)opcodeIn;
+   uint64_t currentLocation = 0;
+   int hasCurrentLocation = 0;
    if (e9k_debug_paused) {
-      e9k_debug_breakNow = 1;
-      m68k_end_timeslice();
+      e9k_debug_request_break();
       return;
+   }
+   if (e9k_debug_stepInstrAfter) {
+      e9k_debug_request_break();
+      return;
+   }
+   if ((opcode & 0xFFC0u) == 0x4E80u || (opcode & 0xFF00u) == 0x6100u) {
+      uint32_t returnPc = 0;
+      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &returnPc) &&
+          e9k_debug_callstackDepth < E9K_DEBUG_CALLSTACK_MAX) {
+         e9k_debug_callstack[e9k_debug_callstackDepth++] = pc24;
+      }
+   } else if (opcode == 0x4E75u || opcode == 0x4E74u || opcode == 0x4E73u || opcode == 0x4E77u) {
+      if (e9k_debug_callstackDepth > 0) {
+         e9k_debug_callstackDepth--;
+      }
+      if (e9k_debug_stepNext) {
+         e9k_debug_stepNextSkipOnce = 1;
+      }
+      if (e9k_debug_stepOut) {
+         e9k_debug_stepOutSkipOnce = 1;
+      }
    }
    if (e9k_debug_stepInstr) {
       e9k_debug_stepInstr = 0;
-      e9k_debug_paused = 1;
-      e9k_debug_breakNow = 1;
-      e9k_debug_breakpointHitLatched = 0;
-      m68k_end_timeslice();
+      e9k_debug_stepInstrAfter = 1;
       return;
    }
+   if (e9k_debug_stepLine && !e9k_debug_stepNext && !e9k_debug_stepOut) {
+      if (e9k_debug_stepIntoPending) {
+         e9k_debug_stepIntoPending = 0;
+         e9k_debug_request_break();
+         return;
+      }
+      {
+         uint32_t returnPc = 0;
+         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &returnPc)) {
+            e9k_debug_stepIntoPending = 1;
+            return;
+         }
+      }
+   }
+   if (e9k_debug_stepLine) {
+      hasCurrentLocation = e9k_debug_resolve_source_location(pc24, &currentLocation);
+   }
+   if (e9k_debug_stepNext && !e9k_debug_stepNextReturnPcValid) {
+      if (hasCurrentLocation && e9k_debug_stepLineHasStart && currentLocation == e9k_debug_stepLineStart) {
+         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_stepNextReturnPc)) {
+            e9k_debug_stepNextReturnPcValid = 1;
+         }
+      }
+   }
+   if (e9k_debug_stepNext && e9k_debug_stepNextSkipOnce) {
+      e9k_debug_stepNextSkipOnce = 0;
+      return;
+   }
+   if (e9k_debug_stepOut && e9k_debug_stepOutSkipOnce) {
+      e9k_debug_stepOutSkipOnce = 0;
+      return;
+   }
+   if (e9k_debug_stepLine) {
+      int shouldBreak = 0;
+      int stepNextReady;
+      int stepOutReady;
+      if (e9k_debug_stepNext && e9k_debug_stepNextReturnPcValid) {
+         if (pc24 != e9k_debug_stepNextReturnPc) {
+            goto skip_step_line_break;
+         }
+         e9k_debug_stepNextReturnPcValid = 0;
+      }
+      if (hasCurrentLocation) {
+         if (!e9k_debug_stepLineHasStart) {
+            shouldBreak = 1;
+         } else if (currentLocation != e9k_debug_stepLineStart) {
+            shouldBreak = 1;
+         }
+      }
+      stepNextReady = (!e9k_debug_stepNext || e9k_debug_callstackDepth <= e9k_debug_stepNextDepth);
+      stepOutReady = (!e9k_debug_stepOut || e9k_debug_callstackDepth <= e9k_debug_stepOutDepth);
+      if (shouldBreak && stepNextReady && stepOutReady) {
+         e9k_debug_request_break();
+         return;
+      }
+   }
+skip_step_line_break:
+   if (e9k_debug_skipBreakpointOnce) {
+      e9k_debug_skipBreakpointOnce = 0;
+      if (pc24 == e9k_debug_skipBreakpointPc) {
+         return;
+      }
+   }
    if (e9k_debug_has_breakpoint(pc24)) {
-      e9k_debug_paused = 1;
-      e9k_debug_breakNow = 1;
+      e9k_debug_request_break();
       e9k_debug_breakpointHitLatched = 1;
       e9k_debug_breakpointHitAddr = pc24;
-      m68k_end_timeslice();
       return;
    }
 #else
    (void)pc;
+   (void)opcodeIn;
 #endif
 }
 
 RETRO_API void
 e9k_debug_pause(void)
 {
-   e9k_debug_paused = 1;
-   e9k_debug_breakNow = 1;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_request_break();
 }
 
 RETRO_API void
@@ -254,7 +448,31 @@ e9k_debug_resume(void)
    e9k_debug_paused = 0;
    e9k_debug_breakNow = 0;
    e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 0;
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_skipBreakpointOnce = 0;
+   e9k_debug_skipBreakpointPc = 0;
    e9k_debug_breakpointHitLatched = 0;
+#ifdef EMU_M68K
+   {
+      uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
+      if (e9k_debug_has_breakpoint(pc24)) {
+         e9k_debug_skipBreakpointOnce = 1;
+         e9k_debug_skipBreakpointPc = pc24;
+      }
+   }
+#endif
 }
 
 RETRO_API int
@@ -268,26 +486,127 @@ e9k_debug_step_instr(void)
 {
    e9k_debug_paused = 0;
    e9k_debug_breakNow = 0;
+   e9k_debug_stepLine = 0;
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
    e9k_debug_stepInstr = 1;
+   e9k_debug_stepInstrAfter = 0;
    e9k_debug_breakpointHitLatched = 0;
 }
 
 RETRO_API void
 e9k_debug_step_line(void)
 {
-   e9k_debug_step_instr();
+   e9k_debug_paused = 0;
+   e9k_debug_breakNow = 0;
+   e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 1;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_breakpointHitLatched = 0;
+#ifdef EMU_M68K
+   {
+      uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
+         e9k_debug_stepLineHasStart = 1;
+      } else {
+         e9k_debug_stepLineHasStart = 0;
+         e9k_debug_stepLineStart = 0;
+      }
+   }
+#else
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+#endif
 }
 
 RETRO_API void
 e9k_debug_step_next(void)
 {
-   e9k_debug_step_instr();
+   e9k_debug_paused = 0;
+   e9k_debug_breakNow = 0;
+   e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 1;
+   e9k_debug_stepNext = 1;
+   e9k_debug_stepNextDepth = e9k_debug_callstackDepth;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 0;
+   e9k_debug_stepOutDepth = 0;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_breakpointHitLatched = 0;
+#ifdef EMU_M68K
+   {
+      uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
+      uint16_t opcode = (uint16_t)m68k_read_memory_16(pc24 & ~1u);
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
+         e9k_debug_stepLineHasStart = 1;
+      } else {
+         e9k_debug_stepLineHasStart = 0;
+         e9k_debug_stepLineStart = 0;
+      }
+      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_stepNextReturnPc)) {
+         e9k_debug_stepNextReturnPcValid = 1;
+      }
+   }
+#else
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+#endif
 }
 
 RETRO_API void
 e9k_debug_step_out(void)
 {
-   e9k_debug_step_instr();
+   e9k_debug_paused = 0;
+   e9k_debug_breakNow = 0;
+   e9k_debug_stepInstr = 0;
+   e9k_debug_stepInstrAfter = 0;
+   e9k_debug_stepLine = 1;
+   e9k_debug_stepNext = 0;
+   e9k_debug_stepNextDepth = 0;
+   e9k_debug_stepNextSkipOnce = 0;
+   e9k_debug_stepNextReturnPcValid = 0;
+   e9k_debug_stepNextReturnPc = 0;
+   e9k_debug_stepOut = 1;
+   e9k_debug_stepOutDepth = (e9k_debug_callstackDepth > 0) ? (e9k_debug_callstackDepth - 1u) : 0u;
+   e9k_debug_stepOutSkipOnce = 0;
+   e9k_debug_stepIntoPending = 0;
+   e9k_debug_breakpointHitLatched = 0;
+#ifdef EMU_M68K
+   {
+      uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
+         e9k_debug_stepLineHasStart = 1;
+      } else {
+         e9k_debug_stepLineHasStart = 0;
+         e9k_debug_stepLineStart = 0;
+      }
+   }
+#else
+   e9k_debug_stepLineHasStart = 0;
+   e9k_debug_stepLineStart = 0;
+#endif
 }
 
 RETRO_API void
@@ -333,6 +652,23 @@ RETRO_API void
 e9k_debug_clear_breakpoints(void)
 {
    e9k_debug_breakpointCount = 0;
+}
+
+RETRO_API size_t
+e9k_debug_read_callstack(uint32_t *out, size_t cap)
+{
+   if (!out || cap == 0) {
+      return 0;
+   }
+   size_t count = e9k_debug_callstackDepth;
+   size_t i;
+   if (count > cap) {
+      count = cap;
+   }
+   for (i = 0; i < count; ++i) {
+      out[i] = e9k_debug_callstack[i];
+   }
+   return count;
 }
 
 RETRO_API size_t
@@ -450,8 +786,8 @@ e9k_debug_disassemble_quick(uint32_t pc, char *out, size_t cap)
 RETRO_API void
 e9k_debug_set_source_location_resolver(int (*resolver)(uint32_t pc24, uint64_t *out_location, void *user), void *user)
 {
-   (void)resolver;
-   (void)user;
+   e9k_debug_sourceLocationResolver = resolver;
+   e9k_debug_sourceLocationResolverUser = user;
 }
 
 char **g_argv;
