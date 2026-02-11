@@ -40,5 +40,6 @@ e9k_debug_remove_temp_breakpoint
 e9k_debug_read_regs
 e9k_debug_read_memory
 e9k_debug_write_memory
+e9k_debug_mega_get_sprite_state
 e9k_debug_disassemble_quick
 e9k_debug_set_source_location_resolver

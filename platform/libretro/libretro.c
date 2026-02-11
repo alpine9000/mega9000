@@ -84,6 +84,7 @@ static uint64_t page_table[2] = {0, 0};
 #include <pico/sound/mix.h>
 #include "../common/input_pico.h"
 #include "../common/version.h"
+#include "../../../e9k-lib/e9k-mega.h"
 #include <libretro.h>
 #include <compat/strcasestr.h>
 
@@ -753,6 +754,249 @@ e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
    (void)size;
    return 0;
 #endif
+}
+
+RETRO_API size_t
+e9k_debug_mega_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
+{
+   int screenW;
+   int screenH;
+   int cropTop = 0;
+   int cropBottom = 0;
+   int cropLeft = 0;
+   int cropRight = 0;
+   int lineCount;
+   int spriteLimitPerLine;
+   int tileLimitPerLine;
+   int maxSprites;
+   int table;
+   int link;
+   int entryCount;
+   int spriteRendered[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
+   int spriteVisible[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
+   int spriteTop[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
+   int spriteBottom[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
+   int spriteLowPriority[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
+   int y;
+   int h40Mode;
+   if (!out || cap < sizeof(*out)) {
+      return 0;
+   }
+
+   memset(out, 0, sizeof(*out));
+
+   screenW = vout_width > 0 ? vout_width : 320;
+   screenH = vout_height > 0 ? vout_height : 240;
+   if (screenW < 1) {
+      screenW = 1;
+   }
+   if (screenH < 1) {
+      screenH = 1;
+   }
+
+   if (vm_current_start_line >= 0 && vm_current_line_count > 0) {
+      cropTop = vm_current_start_line;
+      cropBottom = screenH - cropTop - vm_current_line_count;
+      if (cropBottom < 0) {
+         cropBottom = 0;
+      }
+   }
+   if (vm_current_start_col >= 0 && vm_current_col_count > 0) {
+      cropLeft = vm_current_start_col;
+      cropRight = screenW - cropLeft - vm_current_col_count;
+      if (cropRight < 0) {
+         cropRight = 0;
+      }
+   }
+
+   h40Mode = (Pico.video.reg[12] & 1) ? 1 : 0;
+   if (h40Mode) {
+      spriteLimitPerLine = 20;
+      tileLimitPerLine = 40;
+   } else {
+      spriteLimitPerLine = 16;
+      tileLimitPerLine = 32;
+   }
+   if (PicoIn.opt & POPT_DIS_SPRITE_LIM) {
+      spriteLimitPerLine = MAX_LINE_SPRITES;
+      tileLimitPerLine = MAX_LINE_SPRITES * 2;
+   }
+
+   lineCount = screenH;
+   if (lineCount > E9K_DEBUG_MEGA_MAX_LINES) {
+      lineCount = E9K_DEBUG_MEGA_MAX_LINES;
+   }
+   if (lineCount < 0) {
+      lineCount = 0;
+   }
+
+   out->screenW = screenW;
+   out->screenH = screenH;
+   out->cropTop = cropTop;
+   out->cropBottom = cropBottom;
+   out->cropLeft = cropLeft;
+   out->cropRight = cropRight;
+   out->lineCount = lineCount;
+   out->spriteLimitPerLine = spriteLimitPerLine;
+   out->tileLimitPerLine = tileLimitPerLine;
+   out->frameSpriteUsed = (int)draw_frameSpriteUsed;
+   out->frameSpriteMax = (int)draw_frameSpriteMax;
+   out->spriteEntryCount = 0;
+
+   for (y = 0; y < E9K_DEBUG_MEGA_MAX_FRAME_SPRITES; ++y) {
+      spriteRendered[y] = 0;
+      spriteVisible[y] = 0;
+      spriteTop[y] = 0;
+      spriteBottom[y] = -1;
+      spriteLowPriority[y] = 0;
+   }
+
+   maxSprites = (Pico.video.reg[12] & 1) ? 80 : 64;
+   table = Pico.video.reg[5] & 0x7f;
+   if (Pico.video.reg[12] & 1) {
+      table &= 0x7e;
+   }
+   table <<= 8;
+   link = 0;
+   entryCount = 0;
+   while (entryCount < maxSprites &&
+          link < maxSprites &&
+          entryCount < E9K_DEBUG_MEGA_MAX_FRAME_SPRITES) {
+      u32 *sprite;
+      int code;
+      int code2;
+      int sx;
+      int sy;
+      int hv;
+      int heightTiles;
+      int widthTiles;
+      int nextLink;
+      int spriteX;
+      int spriteY;
+      int spriteW;
+      int spriteH;
+      uint8_t flags = 0;
+      e9k_debug_mega_sprite_entry_t *entry;
+
+      sprite = (u32 *)(PicoMem.vram + ((table + (link << 2)) & 0x7ffc));
+      code = CPU_LE2(VdpSATCache[2 * link]);
+      code2 = CPU_LE2(sprite[1]);
+
+      sy = (code & 0x1ff) - 0x80;
+      hv = (code >> 24) & 0x0f;
+      heightTiles = (hv & 3) + 1;
+      widthTiles = (hv >> 2) + 1;
+      sx = ((code2 >> 16) & 0x1ff) - 0x78;
+      nextLink = (code >> 16) & 0x7f;
+
+      spriteX = sx - 8;
+      spriteY = sy;
+      spriteW = widthTiles * 8;
+      spriteH = heightTiles * 8;
+
+      if (spriteW > 0 &&
+          spriteH > 0 &&
+          spriteX < screenW &&
+          spriteY < lineCount &&
+          (spriteX + spriteW) > 0 &&
+          (spriteY + spriteH) > 0) {
+         flags |= E9K_DEBUG_MEGA_SPRITEFLAG_VISIBLE;
+         spriteVisible[entryCount] = 1;
+      }
+
+      spriteTop[entryCount] = spriteY;
+      spriteBottom[entryCount] = spriteY + spriteH - 1;
+      spriteLowPriority[entryCount] = (code2 & 0x8000) ? 0 : 1;
+
+      entry = &out->spriteEntries[entryCount];
+      entry->x = (int16_t)spriteX;
+      entry->y = (int16_t)spriteY;
+      entry->width = (uint16_t)spriteW;
+      entry->height = (uint16_t)spriteH;
+      entry->satIndex = (uint16_t)link;
+      entry->link = (uint16_t)nextLink;
+      entry->flags = flags;
+      entry->_reserved[0] = 0;
+      entry->_reserved[1] = 0;
+      entry->_reserved[2] = 0;
+
+      entryCount++;
+      if (!nextLink) {
+         break;
+      }
+      link = nextLink;
+   }
+   out->spriteEntryCount = entryCount;
+
+   for (y = 0; y < lineCount; ++y) {
+      const unsigned char *line = &HighLnSpr[y][0];
+      int spriteCount = line[0] & 0x7f;
+      int tileCount = line[2];
+      int processed = line[3];
+      uint8_t flags = 0;
+      if (line[1] & 0x04) {
+         flags |= E9K_DEBUG_MEGA_LINEFLAG_TILE_OVERFLOW;
+      }
+      if (line[1] & 0x01) {
+         flags |= E9K_DEBUG_MEGA_LINEFLAG_MASKED;
+      }
+      if (processed > spriteLimitPerLine) {
+         flags |= E9K_DEBUG_MEGA_LINEFLAG_SPRITE_OVERFLOW;
+      }
+      out->spritesPerLine[y] = (uint8_t)spriteCount;
+      out->tilesPerLine[y] = (uint8_t)tileCount;
+      out->lineFlags[y] = flags;
+
+      if (spriteCount > MAX_LINE_SPRITES) {
+         spriteCount = MAX_LINE_SPRITES;
+      }
+      for (int i = 0; i < spriteCount; ++i) {
+         int spriteIndex = line[4 + i] & 0x7f;
+         if (spriteIndex >= 0 && spriteIndex < entryCount) {
+            spriteRendered[spriteIndex] = 1;
+         }
+      }
+   }
+
+   for (int i = 0; i < entryCount; ++i) {
+      int top;
+      int bottom;
+      int lineStart;
+      int lineEnd;
+      uint8_t flags = out->spriteEntries[i].flags;
+      if (spriteRendered[i]) {
+         flags |= E9K_DEBUG_MEGA_SPRITEFLAG_RENDERED;
+      }
+      if (!spriteRendered[i] && spriteVisible[i]) {
+         top = spriteTop[i];
+         bottom = spriteBottom[i];
+         if (top < 0) {
+            top = 0;
+         }
+         if (bottom >= lineCount) {
+            bottom = lineCount - 1;
+         }
+         lineStart = top;
+         lineEnd = bottom;
+         if (lineStart <= lineEnd) {
+            for (int lineY = lineStart; lineY <= lineEnd; ++lineY) {
+               uint8_t lineFlags = out->lineFlags[lineY];
+               if (lineFlags & E9K_DEBUG_MEGA_LINEFLAG_SPRITE_OVERFLOW) {
+                  flags |= E9K_DEBUG_MEGA_SPRITEFLAG_OVERFLOW_SPRITE;
+               }
+               if (lineFlags & E9K_DEBUG_MEGA_LINEFLAG_TILE_OVERFLOW) {
+                  flags |= E9K_DEBUG_MEGA_SPRITEFLAG_OVERFLOW_TILE;
+               }
+               if (spriteLowPriority[i] && (lineFlags & E9K_DEBUG_MEGA_LINEFLAG_MASKED)) {
+                  flags |= E9K_DEBUG_MEGA_SPRITEFLAG_MASKED;
+               }
+            }
+         }
+      }
+      out->spriteEntries[i].flags = flags;
+   }
+
+   return sizeof(*out);
 }
 
 RETRO_API size_t

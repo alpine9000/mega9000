@@ -103,6 +103,8 @@ u32 VdpSATCache[2*128];  // VDP sprite cache (1st 32 sprite attr bits)
 // sprite cache. stores results of sprite parsing for each display line:
 // [visible_sprites_count, sprl_flags, tile_count, sprites_processed, sprite_idx[sprite_count], last_width]
 unsigned char HighLnSpr[240][4+MAX_LINE_SPRITES+1];
+unsigned draw_frameSpriteUsed;
+unsigned draw_frameSpriteMax;
 
 int rendstatus_old;
 int rendlines;
@@ -1184,6 +1186,7 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
   s32 *pd = HighPreSpr + HighPreSprBank*2;
   int max_sprites = 80, max_width = 328;
   int max_line_sprites = 20; // 20 sprites, 40 tiles
+  int frameSpriteUsed = 0;
 
   // SAT scanning is one line ahead, but don't overshoot. Technically, SAT
   // parsing for line 0 is on the last line of the previous frame.
@@ -1199,6 +1202,7 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
     max_sprites = 64, max_line_sprites = 16, max_width = 264;
   if (*est->PicoOpt & POPT_DIS_SPRITE_LIM)
     max_line_sprites = MAX_LINE_SPRITES;
+  draw_frameSpriteMax = (unsigned)max_sprites;
 
   sh = pvid->reg[0xC]&8; // shadow/hilight?
 
@@ -1288,6 +1292,15 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
     link=(code>>16)&0x7f;
     if (!link) break; // End of sprites
   }
+  if (u >= max_sprites) {
+    frameSpriteUsed = max_sprites;
+  } else {
+    frameSpriteUsed = u + 1;
+  }
+  if (frameSpriteUsed < 0) {
+    frameSpriteUsed = 0;
+  }
+  draw_frameSpriteUsed = (unsigned)frameSpriteUsed;
   *pd = 0;
 
   // fetching sprite pixels isn't done while display is disabled during HBLANK
