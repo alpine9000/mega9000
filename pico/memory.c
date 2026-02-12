@@ -1262,14 +1262,71 @@ unsigned int (*pm68k_read_memory_32)(unsigned int address) = NULL;
 void (*pm68k_write_memory_8) (unsigned int address, unsigned char  value) = NULL;
 void (*pm68k_write_memory_16)(unsigned int address, unsigned short value) = NULL;
 void (*pm68k_write_memory_32)(unsigned int address, unsigned int   value) = NULL;
+extern void e9k_debug_watchpoint_read(unsigned int addr, unsigned int value, unsigned int sizeBits);
+extern void e9k_debug_watchpoint_write(unsigned int addr, unsigned int value, unsigned int oldValue, unsigned int sizeBits, int oldValueValid);
+extern void e9k_debug_protect_filter_write(unsigned int addr, unsigned int sizeBits, unsigned int oldValue, int oldValueValid, unsigned int *inoutValue);
+extern int e9k_debug_watchReadHooksEnabled;
+extern int e9k_debug_watchWriteHooksEnabled;
+extern int e9k_debug_protectHooksEnabled;
 
 /* it appears that Musashi doesn't always mask the unused bits */
-unsigned int m68k_read_memory_8 (unsigned int address) { return pm68k_read_memory_8 (address) & 0xff; }
-unsigned int m68k_read_memory_16(unsigned int address) { return pm68k_read_memory_16(address) & 0xffff; }
-unsigned int m68k_read_memory_32(unsigned int address) { return pm68k_read_memory_32(address); }
-void m68k_write_memory_8 (unsigned int address, unsigned int value) { pm68k_write_memory_8 (address, (u8)value); }
-void m68k_write_memory_16(unsigned int address, unsigned int value) { pm68k_write_memory_16(address,(u16)value); }
-void m68k_write_memory_32(unsigned int address, unsigned int value) { pm68k_write_memory_32(address, value); }
+unsigned int m68k_read_memory_8 (unsigned int address)
+{
+  unsigned int readValue = pm68k_read_memory_8(address) & 0xff;
+  if (e9k_debug_watchReadHooksEnabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 8);
+  }
+  return readValue;
+}
+unsigned int m68k_read_memory_16(unsigned int address)
+{
+  unsigned int readValue = pm68k_read_memory_16(address) & 0xffff;
+  if (e9k_debug_watchReadHooksEnabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 16);
+  }
+  return readValue;
+}
+unsigned int m68k_read_memory_32(unsigned int address)
+{
+  unsigned int readValue = pm68k_read_memory_32(address);
+  if (e9k_debug_watchReadHooksEnabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 32);
+  }
+  return readValue;
+}
+void m68k_write_memory_8 (unsigned int address, unsigned int value)
+{
+  unsigned int writeValue = value & 0xff;
+  if (e9k_debug_protectHooksEnabled) {
+    e9k_debug_protect_filter_write(address & 0x00ffffffu, 8, 0u, 0, &writeValue);
+  }
+  pm68k_write_memory_8(address, (u8)writeValue);
+  if (e9k_debug_watchWriteHooksEnabled) {
+    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 8, 0);
+  }
+}
+void m68k_write_memory_16(unsigned int address, unsigned int value)
+{
+  unsigned int writeValue = value & 0xffff;
+  if (e9k_debug_protectHooksEnabled) {
+    e9k_debug_protect_filter_write(address & 0x00ffffffu, 16, 0u, 0, &writeValue);
+  }
+  pm68k_write_memory_16(address, (u16)writeValue);
+  if (e9k_debug_watchWriteHooksEnabled) {
+    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 16, 0);
+  }
+}
+void m68k_write_memory_32(unsigned int address, unsigned int value)
+{
+  unsigned int writeValue = value;
+  if (e9k_debug_protectHooksEnabled) {
+    e9k_debug_protect_filter_write(address & 0x00ffffffu, 32, 0u, 0, &writeValue);
+  }
+  pm68k_write_memory_32(address, writeValue);
+  if (e9k_debug_watchWriteHooksEnabled) {
+    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 32, 0);
+  }
+}
 
 static void m68k_mem_setup(void)
 {
