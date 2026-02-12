@@ -1265,6 +1265,7 @@ void (*pm68k_write_memory_32)(unsigned int address, unsigned int   value) = NULL
 extern void e9k_debug_watchpoint_read(unsigned int addr, unsigned int value, unsigned int sizeBits);
 extern void e9k_debug_watchpoint_write(unsigned int addr, unsigned int value, unsigned int oldValue, unsigned int sizeBits, int oldValueValid);
 extern void e9k_debug_protect_filter_write(unsigned int addr, unsigned int sizeBits, unsigned int oldValue, int oldValueValid, unsigned int *inoutValue);
+extern int e9k_debug_protect_should_block_write(unsigned int addr, unsigned int sizeBits);
 extern int e9k_debug_watchReadHooksEnabled;
 extern int e9k_debug_watchWriteHooksEnabled;
 extern int e9k_debug_protectHooksEnabled;
@@ -1296,35 +1297,56 @@ unsigned int m68k_read_memory_32(unsigned int address)
 }
 void m68k_write_memory_8 (unsigned int address, unsigned int value)
 {
+  unsigned int addr24 = address & 0x00ffffffu;
   unsigned int writeValue = value & 0xff;
   if (e9k_debug_protectHooksEnabled) {
-    e9k_debug_protect_filter_write(address & 0x00ffffffu, 8, 0u, 0, &writeValue);
+    if (e9k_debug_protect_should_block_write(addr24, 8)) {
+      if (e9k_debug_watchWriteHooksEnabled) {
+        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 8, 0);
+      }
+      return;
+    }
+    e9k_debug_protect_filter_write(addr24, 8, 0u, 0, &writeValue);
   }
   pm68k_write_memory_8(address, (u8)writeValue);
   if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 8, 0);
+    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 8, 0);
   }
 }
 void m68k_write_memory_16(unsigned int address, unsigned int value)
 {
+  unsigned int addr24 = address & 0x00ffffffu;
   unsigned int writeValue = value & 0xffff;
   if (e9k_debug_protectHooksEnabled) {
-    e9k_debug_protect_filter_write(address & 0x00ffffffu, 16, 0u, 0, &writeValue);
+    if (e9k_debug_protect_should_block_write(addr24, 16)) {
+      if (e9k_debug_watchWriteHooksEnabled) {
+        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 16, 0);
+      }
+      return;
+    }
+    e9k_debug_protect_filter_write(addr24, 16, 0u, 0, &writeValue);
   }
   pm68k_write_memory_16(address, (u16)writeValue);
   if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 16, 0);
+    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 16, 0);
   }
 }
 void m68k_write_memory_32(unsigned int address, unsigned int value)
 {
+  unsigned int addr24 = address & 0x00ffffffu;
   unsigned int writeValue = value;
   if (e9k_debug_protectHooksEnabled) {
-    e9k_debug_protect_filter_write(address & 0x00ffffffu, 32, 0u, 0, &writeValue);
+    if (e9k_debug_protect_should_block_write(addr24, 32)) {
+      if (e9k_debug_watchWriteHooksEnabled) {
+        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 32, 0);
+      }
+      return;
+    }
+    e9k_debug_protect_filter_write(addr24, 32, 0u, 0, &writeValue);
   }
   pm68k_write_memory_32(address, writeValue);
   if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(address & 0x00ffffffu, writeValue, 0u, 32, 0);
+    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 32, 0);
   }
 }
 

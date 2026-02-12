@@ -423,6 +423,34 @@ e9k_debug_protect_filter_write(uint32_t addr, uint32_t sizeBits, uint32_t oldVal
    }
 }
 
+int
+e9k_debug_protect_should_block_write(uint32_t addr, uint32_t sizeBits)
+{
+   uint32_t index;
+   if (e9k_debug_protectEnabledMask == 0ull) {
+      return 0;
+   }
+   for (index = 0; index < E9K_PROTECT_COUNT; ++index) {
+      e9k_debug_protect_t *entry;
+      uint32_t addrMask;
+      if ((e9k_debug_protectEnabledMask & (1ull << index)) == 0ull) {
+         continue;
+      }
+      entry = &e9k_debug_protects[index];
+      if (entry->mode != E9K_PROTECT_MODE_BLOCK) {
+         continue;
+      }
+      if (entry->sizeBits != sizeBits) {
+         continue;
+      }
+      addrMask = entry->addrMask ? entry->addrMask : 0xffffffffu;
+      if ((addr & addrMask) == (entry->addr & addrMask)) {
+         return 1;
+      }
+   }
+   return 0;
+}
+
 #ifdef EMU_M68K
 unsigned int
 m68k_read_disassembler_8(unsigned int address)
