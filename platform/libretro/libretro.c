@@ -96,138 +96,134 @@ static retro_input_poll_t input_poll_cb;
 static retro_input_state_t input_state_cb;
 static retro_environment_t environ_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
-static void (*e9k_debug_vblankCb)(void *);
-static void *e9k_debug_vblankUser;
+static void (*e9k_debug_vblank_cb)(void *);
+static void *e9k_debug_vblank_user;
 #define E9K_DEBUG_CALLSTACK_MAX 256
 static int e9k_debug_paused;
-static int e9k_debug_breakNow;
+static int e9k_debug_break_now;
 static uint32_t e9k_debug_callstack[E9K_DEBUG_CALLSTACK_MAX];
-static size_t e9k_debug_callstackDepth;
-static int e9k_debug_stepInstr;
-static int e9k_debug_stepInstrAfter;
-static int e9k_debug_stepLine;
-static int e9k_debug_stepLineHasStart;
-static uint64_t e9k_debug_stepLineStart;
-static int e9k_debug_stepNext;
-static size_t e9k_debug_stepNextDepth;
-static int e9k_debug_stepNextSkipOnce;
-static int e9k_debug_stepNextReturnPcValid;
-static uint32_t e9k_debug_stepNextReturnPc;
-static int e9k_debug_stepOut;
-static size_t e9k_debug_stepOutDepth;
-static int e9k_debug_stepOutSkipOnce;
-static int e9k_debug_stepIntoPending;
-static int e9k_debug_skipBreakpointOnce;
-static uint32_t e9k_debug_skipBreakpointPc;
-static int e9k_debug_breakpointHitLatched;
-static uint32_t e9k_debug_breakpointHitAddr;
+static size_t e9k_debug_callstack_depth;
+static int e9k_debug_step_instr_pending;
+static int e9k_debug_step_instr_after;
+static int e9k_debug_step_line_pending;
+static int e9k_debug_step_line_has_start;
+static uint64_t e9k_debug_step_line_start;
+static int e9k_debug_step_next_pending;
+static size_t e9k_debug_step_next_depth;
+static int e9k_debug_step_next_skip_once;
+static int e9k_debug_step_next_return_pc_valid;
+static uint32_t e9k_debug_step_next_return_pc;
+static int e9k_debug_step_out_pending;
+static size_t e9k_debug_step_out_depth;
+static int e9k_debug_step_out_skip_once;
+static int e9k_debug_step_into_pending;
+static int e9k_debug_skip_breakpoint_once;
+static uint32_t e9k_debug_skip_breakpoint_pc;
+static int e9k_debug_breakpoint_hit_latched;
+static uint32_t e9k_debug_breakpoint_hit_addr;
 static uint32_t e9k_debug_breakpoints[64];
-static size_t e9k_debug_breakpointCount;
-static int (*e9k_debug_sourceLocationResolver)(uint32_t pc24, uint64_t *out_location, void *user);
-static void *e9k_debug_sourceLocationResolverUser;
+static size_t e9k_debug_breakpoint_count;
+static int (*e9k_debug_source_location_resolver)(uint32_t pc24, uint64_t *out_location, void *user);
+static void *e9k_debug_source_location_resolver_user;
 static e9k_debug_watchpoint_t e9k_debug_watchpoints[E9K_WATCHPOINT_COUNT];
-static uint64_t e9k_debug_watchpointEnabledMask;
+static uint64_t e9k_debug_watchpoint_enabled_mask;
 static e9k_debug_watchbreak_t e9k_debug_watchbreak;
-static int e9k_debug_watchbreakValid;
+static int e9k_debug_watchbreak_valid;
 static e9k_debug_protect_t e9k_debug_protects[E9K_PROTECT_COUNT];
-static uint64_t e9k_debug_protectEnabledMask;
+static uint64_t e9k_debug_protect_enabled_mask;
 static e9k_debug_checkpoint_t e9k_debug_checkpoints[E9K_CHECKPOINT_COUNT];
-static int e9k_debug_checkpointEnabled;
-static int e9k_debug_profilerEnabled;
-static int e9k_debug_profilerStream;
-static uint64_t e9k_debug_instructionCount;
-static int e9k_debug_watchpointSuspend;
-int e9k_debug_watchReadHooksEnabled;
-int e9k_debug_watchWriteHooksEnabled;
-int e9k_debug_protectHooksEnabled;
+static int e9k_debug_checkpoint_enabled;
+static int e9k_debug_profiler_enabled;
+static int e9k_debug_profiler_stream;
+static uint64_t e9k_debug_instruction_count;
+static int e9k_debug_watchpoint_suspend_count;
+int e9k_debug_watch_read_hooks_enabled;
+int e9k_debug_watch_write_hooks_enabled;
+int e9k_debug_protect_hooks_enabled;
 
-static void
-e9k_debug_refreshMemoryHookFlags(void)
+static void e9k_debug_refresh_memory_hook_flags(void)
 {
    uint32_t index;
-   int watchReadEnabled = 0;
-   int watchWriteEnabled = 0;
+   int watch_read_enabled = 0;
+   int watch_write_enabled = 0;
 
    for (index = 0; index < E9K_WATCHPOINT_COUNT; ++index) {
       uint64_t bit;
-      uint32_t opMask;
+      uint32_t op_mask;
       bit = (1ull << index);
-      if ((e9k_debug_watchpointEnabledMask & bit) == 0ull) {
+      if ((e9k_debug_watchpoint_enabled_mask & bit) == 0ull) {
          continue;
       }
-      opMask = e9k_debug_watchpoints[index].op_mask;
-      if (opMask & E9K_WATCH_OP_READ) {
-         watchReadEnabled = 1;
+      op_mask = e9k_debug_watchpoints[index].op_mask;
+      if (op_mask & E9K_WATCH_OP_READ) {
+         watch_read_enabled = 1;
       }
-      if (opMask & E9K_WATCH_OP_WRITE) {
-         watchWriteEnabled = 1;
+      if (op_mask & E9K_WATCH_OP_WRITE) {
+         watch_write_enabled = 1;
       }
-      if (watchReadEnabled && watchWriteEnabled) {
+      if (watch_read_enabled && watch_write_enabled) {
          break;
       }
    }
 
-   e9k_debug_watchReadHooksEnabled = watchReadEnabled;
-   e9k_debug_watchWriteHooksEnabled = watchWriteEnabled;
-   e9k_debug_protectHooksEnabled = (e9k_debug_protectEnabledMask != 0ull) ? 1 : 0;
+   e9k_debug_watch_read_hooks_enabled = watch_read_enabled;
+   e9k_debug_watch_write_hooks_enabled = watch_write_enabled;
+   e9k_debug_protect_hooks_enabled = (e9k_debug_protect_enabled_mask != 0ull) ? 1 : 0;
 }
 
-static void
-e9k_debug_reset_state(void)
+static void e9k_debug_reset_state(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_callstackDepth = 0;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 0;
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_skipBreakpointOnce = 0;
-   e9k_debug_skipBreakpointPc = 0;
-   e9k_debug_breakpointHitLatched = 0;
-   e9k_debug_breakpointHitAddr = 0;
-   e9k_debug_breakpointCount = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_callstack_depth = 0;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_skip_breakpoint_once = 0;
+   e9k_debug_skip_breakpoint_pc = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
+   e9k_debug_breakpoint_hit_addr = 0;
+   e9k_debug_breakpoint_count = 0;
    memset(e9k_debug_watchpoints, 0, sizeof(e9k_debug_watchpoints));
-   e9k_debug_watchpointEnabledMask = 0;
+   e9k_debug_watchpoint_enabled_mask = 0;
    memset(&e9k_debug_watchbreak, 0, sizeof(e9k_debug_watchbreak));
-   e9k_debug_watchbreakValid = 0;
+   e9k_debug_watchbreak_valid = 0;
    memset(e9k_debug_protects, 0, sizeof(e9k_debug_protects));
-   e9k_debug_protectEnabledMask = 0;
+   e9k_debug_protect_enabled_mask = 0;
    memset(e9k_debug_checkpoints, 0, sizeof(e9k_debug_checkpoints));
-   e9k_debug_checkpointEnabled = 0;
-   e9k_debug_profilerEnabled = 0;
-   e9k_debug_profilerStream = 0;
-   e9k_debug_instructionCount = 0;
-   e9k_debug_watchpointSuspend = 0;
-   e9k_debug_watchReadHooksEnabled = 0;
-   e9k_debug_watchWriteHooksEnabled = 0;
-   e9k_debug_protectHooksEnabled = 0;
+   e9k_debug_checkpoint_enabled = 0;
+   e9k_debug_profiler_enabled = 0;
+   e9k_debug_profiler_stream = 0;
+   e9k_debug_instruction_count = 0;
+   e9k_debug_watchpoint_suspend_count = 0;
+   e9k_debug_watch_read_hooks_enabled = 0;
+   e9k_debug_watch_write_hooks_enabled = 0;
+   e9k_debug_protect_hooks_enabled = 0;
 }
 
-static uint32_t
-e9k_debug_maskValue(uint32_t value, uint32_t sizeBits)
+static uint32_t e9k_debug_mask_value(uint32_t value, uint32_t size_bits)
 {
-   if (sizeBits == 8u) {
+   if (size_bits == 8u) {
       return value & 0xffu;
    }
-   if (sizeBits == 16u) {
+   if (size_bits == 16u) {
       return value & 0xffffu;
    }
    return value;
 }
 
-static uint64_t
-e9k_debug_maskForCount(uint32_t count)
+static uint64_t e9k_debug_mask_for_count(uint32_t count)
 {
    if (count >= 64u) {
       return ~0ull;
@@ -235,74 +231,73 @@ e9k_debug_maskForCount(uint32_t count)
    return (1ull << count) - 1ull;
 }
 
-static int
-e9k_debug_watchpointMatch(const e9k_debug_watchpoint_t *watchpoint, uint32_t accessAddr, uint32_t accessKind, uint32_t accessSizeBits, uint32_t value, uint32_t oldValue, int oldValueValid)
+static int e9k_debug_watchpoint_match(const e9k_debug_watchpoint_t *watchpoint, uint32_t access_addr, uint32_t access_kind, uint32_t access_size_bits, uint32_t value, uint32_t old_value, int old_value_valid)
 {
-   uint32_t opMask;
-   uint32_t maskedValue;
-   uint32_t maskedOldValue;
+   uint32_t op_mask;
+   uint32_t masked_value;
+   uint32_t masked_old_value;
    if (!watchpoint) {
       return 0;
    }
-   opMask = watchpoint->op_mask;
-   if (!(opMask & (E9K_WATCH_OP_READ | E9K_WATCH_OP_WRITE))) {
+   op_mask = watchpoint->op_mask;
+   if (!(op_mask & (E9K_WATCH_OP_READ | E9K_WATCH_OP_WRITE))) {
       return 0;
    }
-   if (accessKind == E9K_WATCH_ACCESS_READ) {
-      if (!(opMask & E9K_WATCH_OP_READ)) {
+   if (access_kind == E9K_WATCH_ACCESS_READ) {
+      if (!(op_mask & E9K_WATCH_OP_READ)) {
          return 0;
       }
-   } else if (accessKind == E9K_WATCH_ACCESS_WRITE) {
-      if (!(opMask & E9K_WATCH_OP_WRITE)) {
+   } else if (access_kind == E9K_WATCH_ACCESS_WRITE) {
+      if (!(op_mask & E9K_WATCH_OP_WRITE)) {
          return 0;
       }
    } else {
       return 0;
    }
 
-   if (opMask & E9K_WATCH_OP_ADDR_COMPARE_MASK) {
+   if (op_mask & E9K_WATCH_OP_ADDR_COMPARE_MASK) {
       uint32_t mask = watchpoint->addr_mask_operand;
       if (mask != 0u) {
-         if ((accessAddr & mask) != (watchpoint->addr & mask)) {
+         if ((access_addr & mask) != (watchpoint->addr & mask)) {
             return 0;
          }
       }
    } else {
-      if (accessAddr != watchpoint->addr) {
+      if (access_addr != watchpoint->addr) {
          return 0;
       }
    }
 
-   if (opMask & E9K_WATCH_OP_ACCESS_SIZE) {
+   if (op_mask & E9K_WATCH_OP_ACCESS_SIZE) {
       if (watchpoint->size_operand != 8u && watchpoint->size_operand != 16u && watchpoint->size_operand != 32u) {
          return 0;
       }
-      if (accessSizeBits != watchpoint->size_operand) {
+      if (access_size_bits != watchpoint->size_operand) {
          return 0;
       }
    }
 
-   maskedValue = e9k_debug_maskValue(value, accessSizeBits);
-   maskedOldValue = e9k_debug_maskValue(oldValue, accessSizeBits);
+   masked_value = e9k_debug_mask_value(value, access_size_bits);
+   masked_old_value = e9k_debug_mask_value(old_value, access_size_bits);
 
-   if (opMask & E9K_WATCH_OP_VALUE_EQ) {
-      if (maskedValue != e9k_debug_maskValue(watchpoint->value_operand, accessSizeBits)) {
+   if (op_mask & E9K_WATCH_OP_VALUE_EQ) {
+      if (masked_value != e9k_debug_mask_value(watchpoint->value_operand, access_size_bits)) {
          return 0;
       }
    }
-   if (opMask & E9K_WATCH_OP_OLD_VALUE_EQ) {
-      if (!oldValueValid) {
+   if (op_mask & E9K_WATCH_OP_OLD_VALUE_EQ) {
+      if (!old_value_valid) {
          return 0;
       }
-      if (maskedOldValue != e9k_debug_maskValue(watchpoint->old_value_operand, accessSizeBits)) {
+      if (masked_old_value != e9k_debug_mask_value(watchpoint->old_value_operand, access_size_bits)) {
          return 0;
       }
    }
-   if (opMask & E9K_WATCH_OP_VALUE_NEQ_OLD) {
-      if (!oldValueValid) {
+   if (op_mask & E9K_WATCH_OP_VALUE_NEQ_OLD) {
+      if (!old_value_valid) {
          return 0;
       }
-      if (maskedOldValue == e9k_debug_maskValue(watchpoint->diff_operand, accessSizeBits)) {
+      if (masked_old_value == e9k_debug_mask_value(watchpoint->diff_operand, access_size_bits)) {
          return 0;
       }
    }
@@ -310,11 +305,10 @@ e9k_debug_watchpointMatch(const e9k_debug_watchpoint_t *watchpoint, uint32_t acc
    return 1;
 }
 
-static void
-e9k_debug_watchbreakRequest(uint32_t index, uint32_t accessAddr, uint32_t accessKind, uint32_t accessSizeBits, uint32_t value, uint32_t oldValue, int oldValueValid)
+static void e9k_debug_watchbreak_request(uint32_t index, uint32_t access_addr, uint32_t access_kind, uint32_t access_size_bits, uint32_t value, uint32_t old_value, int old_value_valid)
 {
    e9k_debug_watchpoint_t *watchpoint;
-   if (e9k_debug_watchbreakValid) {
+   if (e9k_debug_watchbreak_valid) {
       return;
    }
    if (index >= E9K_WATCHPOINT_COUNT) {
@@ -330,122 +324,116 @@ e9k_debug_watchbreakRequest(uint32_t index, uint32_t accessAddr, uint32_t access
    e9k_debug_watchbreak.old_value_operand = watchpoint->old_value_operand;
    e9k_debug_watchbreak.size_operand = watchpoint->size_operand;
    e9k_debug_watchbreak.addr_mask_operand = watchpoint->addr_mask_operand;
-   e9k_debug_watchbreak.access_addr = accessAddr;
-   e9k_debug_watchbreak.access_kind = accessKind;
-   e9k_debug_watchbreak.access_size = accessSizeBits;
-   e9k_debug_watchbreak.value = e9k_debug_maskValue(value, accessSizeBits);
-   e9k_debug_watchbreak.old_value = e9k_debug_maskValue(oldValue, accessSizeBits);
-   e9k_debug_watchbreak.old_value_valid = oldValueValid ? 1u : 0u;
-   e9k_debug_watchbreakValid = 1;
+   e9k_debug_watchbreak.access_addr = access_addr;
+   e9k_debug_watchbreak.access_kind = access_kind;
+   e9k_debug_watchbreak.access_size = access_size_bits;
+   e9k_debug_watchbreak.value = e9k_debug_mask_value(value, access_size_bits);
+   e9k_debug_watchbreak.old_value = e9k_debug_mask_value(old_value, access_size_bits);
+   e9k_debug_watchbreak.old_value_valid = old_value_valid ? 1u : 0u;
+   e9k_debug_watchbreak_valid = 1;
    e9k_debug_paused = 1;
-   e9k_debug_breakNow = 1;
+   e9k_debug_break_now = 1;
 }
 
-void
-e9k_debug_watchpoint_suspend(void)
+void e9k_debug_watchpoint_suspend(void)
 {
-   e9k_debug_watchpointSuspend++;
+   e9k_debug_watchpoint_suspend_count++;
 }
 
-void
-e9k_debug_watchpoint_resume(void)
+void e9k_debug_watchpoint_resume(void)
 {
-   if (e9k_debug_watchpointSuspend > 0) {
-      e9k_debug_watchpointSuspend--;
+   if (e9k_debug_watchpoint_suspend_count > 0) {
+      e9k_debug_watchpoint_suspend_count--;
    }
 }
 
-void
-e9k_debug_watchpoint_read(uint32_t addr, uint32_t value, uint32_t sizeBits)
+void e9k_debug_watchpoint_read(uint32_t addr, uint32_t value, uint32_t size_bits)
 {
    uint32_t index;
-   if (e9k_debug_watchpointSuspend > 0 || e9k_debug_paused || e9k_debug_watchpointEnabledMask == 0) {
+   if (e9k_debug_watchpoint_suspend_count > 0 || e9k_debug_paused || e9k_debug_watchpoint_enabled_mask == 0) {
       return;
    }
    for (index = 0; index < E9K_WATCHPOINT_COUNT; ++index) {
-      if ((e9k_debug_watchpointEnabledMask & (1ull << index)) == 0ull) {
+      if ((e9k_debug_watchpoint_enabled_mask & (1ull << index)) == 0ull) {
          continue;
       }
-      if (e9k_debug_watchpointMatch(&e9k_debug_watchpoints[index], addr, E9K_WATCH_ACCESS_READ, sizeBits, value, value, 1)) {
-         e9k_debug_watchbreakRequest(index, addr, E9K_WATCH_ACCESS_READ, sizeBits, value, value, 1);
+      if (e9k_debug_watchpoint_match(&e9k_debug_watchpoints[index], addr, E9K_WATCH_ACCESS_READ, size_bits, value, value, 1)) {
+         e9k_debug_watchbreak_request(index, addr, E9K_WATCH_ACCESS_READ, size_bits, value, value, 1);
          return;
       }
    }
 }
 
-void
-e9k_debug_watchpoint_write(uint32_t addr, uint32_t value, uint32_t oldValue, uint32_t sizeBits, int oldValueValid)
+void e9k_debug_watchpoint_write(uint32_t addr, uint32_t value, uint32_t old_value, uint32_t size_bits, int old_value_valid)
 {
    uint32_t index;
-   if (e9k_debug_watchpointSuspend > 0 || e9k_debug_paused || e9k_debug_watchpointEnabledMask == 0) {
+   if (e9k_debug_watchpoint_suspend_count > 0 || e9k_debug_paused || e9k_debug_watchpoint_enabled_mask == 0) {
       return;
    }
    for (index = 0; index < E9K_WATCHPOINT_COUNT; ++index) {
-      if ((e9k_debug_watchpointEnabledMask & (1ull << index)) == 0ull) {
+      if ((e9k_debug_watchpoint_enabled_mask & (1ull << index)) == 0ull) {
          continue;
       }
-      if (e9k_debug_watchpointMatch(&e9k_debug_watchpoints[index], addr, E9K_WATCH_ACCESS_WRITE, sizeBits, value, oldValue, oldValueValid)) {
-         e9k_debug_watchbreakRequest(index, addr, E9K_WATCH_ACCESS_WRITE, sizeBits, value, oldValue, oldValueValid);
+      if (e9k_debug_watchpoint_match(&e9k_debug_watchpoints[index], addr, E9K_WATCH_ACCESS_WRITE, size_bits, value, old_value, old_value_valid)) {
+         e9k_debug_watchbreak_request(index, addr, E9K_WATCH_ACCESS_WRITE, size_bits, value, old_value, old_value_valid);
          return;
       }
    }
 }
 
-void
-e9k_debug_protect_filter_write(uint32_t addr, uint32_t sizeBits, uint32_t oldValue, int oldValueValid, uint32_t *inoutValue)
+void e9k_debug_protect_filter_write(uint32_t addr, uint32_t size_bits, uint32_t old_value, int old_value_valid, uint32_t *inout_value)
 {
    uint32_t index;
-   if (!inoutValue || e9k_debug_protectEnabledMask == 0) {
+   if (!inout_value || e9k_debug_protect_enabled_mask == 0) {
       return;
    }
    for (index = 0; index < E9K_PROTECT_COUNT; ++index) {
       e9k_debug_protect_t *entry;
       uint32_t mask;
-      uint32_t addrMask;
-      if ((e9k_debug_protectEnabledMask & (1ull << index)) == 0ull) {
+      uint32_t addr_mask;
+      if ((e9k_debug_protect_enabled_mask & (1ull << index)) == 0ull) {
          continue;
       }
       entry = &e9k_debug_protects[index];
-      if (entry->sizeBits != sizeBits) {
+      if (entry->sizeBits != size_bits) {
          continue;
       }
-      addrMask = entry->addrMask ? entry->addrMask : 0xffffffffu;
-      if ((addr & addrMask) != (entry->addr & addrMask)) {
+      addr_mask = entry->addrMask ? entry->addrMask : 0xffffffffu;
+      if ((addr & addr_mask) != (entry->addr & addr_mask)) {
          continue;
       }
       if (entry->mode == E9K_PROTECT_MODE_BLOCK) {
-         if (oldValueValid) {
-            *inoutValue = oldValue;
+         if (old_value_valid) {
+            *inout_value = old_value;
          }
       } else if (entry->mode == E9K_PROTECT_MODE_SET) {
-         mask = (sizeBits == 8u) ? 0xffu : ((sizeBits == 16u) ? 0xffffu : 0xffffffffu);
-         *inoutValue = entry->value & mask;
+         mask = (size_bits == 8u) ? 0xffu : ((size_bits == 16u) ? 0xffffu : 0xffffffffu);
+         *inout_value = entry->value & mask;
       }
    }
 }
 
-int
-e9k_debug_protect_should_block_write(uint32_t addr, uint32_t sizeBits)
+int e9k_debug_protect_should_block_write(uint32_t addr, uint32_t size_bits)
 {
    uint32_t index;
-   if (e9k_debug_protectEnabledMask == 0ull) {
+   if (e9k_debug_protect_enabled_mask == 0ull) {
       return 0;
    }
    for (index = 0; index < E9K_PROTECT_COUNT; ++index) {
       e9k_debug_protect_t *entry;
-      uint32_t addrMask;
-      if ((e9k_debug_protectEnabledMask & (1ull << index)) == 0ull) {
+      uint32_t addr_mask;
+      if ((e9k_debug_protect_enabled_mask & (1ull << index)) == 0ull) {
          continue;
       }
       entry = &e9k_debug_protects[index];
       if (entry->mode != E9K_PROTECT_MODE_BLOCK) {
          continue;
       }
-      if (entry->sizeBits != sizeBits) {
+      if (entry->sizeBits != size_bits) {
          continue;
       }
-      addrMask = entry->addrMask ? entry->addrMask : 0xffffffffu;
-      if ((addr & addrMask) == (entry->addr & addrMask)) {
+      addr_mask = entry->addrMask ? entry->addrMask : 0xffffffffu;
+      if ((addr & addr_mask) == (entry->addr & addr_mask)) {
          return 1;
       }
    }
@@ -453,20 +441,17 @@ e9k_debug_protect_should_block_write(uint32_t addr, uint32_t sizeBits)
 }
 
 #ifdef EMU_M68K
-unsigned int
-m68k_read_disassembler_8(unsigned int address)
+unsigned int m68k_read_disassembler_8(unsigned int address)
 {
    return m68k_read_memory_8(address);
 }
 
-unsigned int
-m68k_read_disassembler_16(unsigned int address)
+unsigned int m68k_read_disassembler_16(unsigned int address)
 {
    return m68k_read_memory_16(address);
 }
 
-unsigned int
-m68k_read_disassembler_32(unsigned int address)
+unsigned int m68k_read_disassembler_32(unsigned int address)
 {
    return m68k_read_memory_32(address);
 }
@@ -498,6 +483,7 @@ static void *vout_buf, *vout_ghosting_buf;
 static int vout_width, vout_height, vout_offset;
 static float vout_aspect = 0.0;
 static int vout_ghosting = 0;
+static uint32_t e9k_debug_megadrive_palette_greyscale_mask = 0u;
 
 static bool libretro_update_av_info = false;
 static bool libretro_update_geometry = false;
@@ -516,24 +502,79 @@ static short ALIGNED(4) sndBuffer[2*SND_RATE_MAX/50];
 
 static void snd_write(int len);
 
-RETRO_API void
-e9k_debug_set_vblank_callback(void (*cb)(void *), void *user)
+static unsigned short e9k_debug_megadrive_greyscale_color(unsigned short color)
 {
-   e9k_debug_vblankCb = cb;
-   e9k_debug_vblankUser = user;
+#if defined(USE_BGR555)
+   unsigned b = (color >> 10) & 0x001fu;
+   unsigned g = (color >> 5) & 0x001fu;
+   unsigned r = color & 0x001fu;
+   unsigned grey = (30u * r + 59u * g + 11u * b) / 100u;
+
+   return (unsigned short)((grey << 10) | (grey << 5) | grey);
+#elif defined(USE_BGR565)
+   unsigned b = (color >> 11) & 0x001fu;
+   unsigned g = (color >> 5) & 0x003fu;
+   unsigned r = color & 0x001fu;
+   unsigned grey = (30u * r * 2u + 59u * g + 11u * b * 2u) / 100u;
+   unsigned grey5 = grey >> 1;
+
+   return (unsigned short)((grey5 << 11) | (grey << 5) | grey5);
+#else
+   unsigned r = (color >> 11) & 0x001fu;
+   unsigned g = (color >> 5) & 0x003fu;
+   unsigned b = color & 0x001fu;
+   unsigned grey = (30u * r * 2u + 59u * g + 11u * b * 2u) / 100u;
+   unsigned grey5 = grey >> 1;
+
+   return (unsigned short)((grey5 << 11) | (grey << 5) | grey5);
+#endif
 }
 
-static uint32_t
-e9k_debug_mask_addr(uint32_t addr)
+static unsigned short e9k_debug_megadrive_palette_color(unsigned index, unsigned short color)
+{
+   unsigned bank = (index >> 4) & 3u;
+
+   if ((e9k_debug_megadrive_palette_greyscale_mask & (1u << bank)) == 0u) {
+      return color;
+   }
+   return e9k_debug_megadrive_greyscale_color(color);
+}
+
+static void e9k_debug_megadrive_clear_palette_greyscale(void)
+{
+   e9k_debug_megadrive_palette_greyscale_mask = 0u;
+   draw_palette_debug_color = NULL;
+   Pico.m.dirtyPal = 1;
+}
+
+RETRO_API void e9k_debug_megadrive_set_palette_greyscale_mask(uint32_t mask)
+{
+   e9k_debug_megadrive_palette_greyscale_mask = mask & 0x0fu;
+   draw_palette_debug_color = e9k_debug_megadrive_palette_greyscale_mask != 0u ?
+         e9k_debug_megadrive_palette_color : NULL;
+   Pico.m.dirtyPal = 1;
+}
+
+RETRO_API uint32_t e9k_debug_megadrive_get_palette_greyscale_mask(void)
+{
+   return e9k_debug_megadrive_palette_greyscale_mask;
+}
+
+RETRO_API void e9k_debug_set_vblank_callback(void (*cb)(void *), void *user)
+{
+   e9k_debug_vblank_cb = cb;
+   e9k_debug_vblank_user = user;
+}
+
+static uint32_t e9k_debug_mask_addr(uint32_t addr)
 {
    return addr & 0x00ffffffu;
 }
 
-static int
-e9k_debug_has_breakpoint(uint32_t pc24)
+static int e9k_debug_has_breakpoint(uint32_t pc24)
 {
    size_t i;
-   for (i = 0; i < e9k_debug_breakpointCount; ++i) {
+   for (i = 0; i < e9k_debug_breakpoint_count; ++i) {
       if (e9k_debug_breakpoints[i] == pc24) {
          return 1;
       }
@@ -541,48 +582,45 @@ e9k_debug_has_breakpoint(uint32_t pc24)
    return 0;
 }
 
-static void
-e9k_debug_request_break(void)
+static void e9k_debug_request_break(void)
 {
    e9k_debug_paused = 1;
-   e9k_debug_breakNow = 1;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 0;
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 1;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 #ifdef EMU_M68K
    m68k_end_timeslice();
 #endif
 }
 
-static int
-e9k_debug_resolve_source_location(uint32_t pc24, uint64_t *outLocation)
+static int e9k_debug_resolve_source_location(uint32_t pc24, uint64_t *out_location)
 {
-   if (!outLocation) {
+   if (!out_location) {
       return 0;
    }
-   *outLocation = 0;
-   if (!e9k_debug_sourceLocationResolver) {
+   *out_location = 0;
+   if (!e9k_debug_source_location_resolver) {
       return 0;
    }
-   return e9k_debug_sourceLocationResolver(pc24 & 0x00ffffffu, outLocation, e9k_debug_sourceLocationResolverUser) ? 1 : 0;
+   return e9k_debug_source_location_resolver(pc24 & 0x00ffffffu, out_location, e9k_debug_source_location_resolver_user) ? 1 : 0;
 }
 
-static int
-e9k_debug_try_get_call_return_pc(uint32_t pc24, uint16_t opcode, uint32_t *outReturnPc)
+static int e9k_debug_try_get_call_return_pc(uint32_t pc24, uint16_t opcode, uint32_t *out_return_pc)
 {
-   if (!outReturnPc) {
+   if (!out_return_pc) {
       return 0;
    }
    if ((opcode & 0xFFC0u) == 0x4E80u) {
@@ -602,7 +640,7 @@ e9k_debug_try_get_call_return_pc(uint32_t pc24, uint16_t opcode, uint32_t *outRe
       } else if (mode < 2) {
          return 0;
       }
-      *outReturnPc = (pc24 + 2u + ext) & 0x00ffffffu;
+      *out_return_pc = (pc24 + 2u + ext) & 0x00ffffffu;
       return 1;
    }
    if ((opcode & 0xFF00u) == 0x6100u) {
@@ -613,357 +651,342 @@ e9k_debug_try_get_call_return_pc(uint32_t pc24, uint16_t opcode, uint32_t *outRe
       } else if (disp8 == 0xffu) {
          len = 6u;
       }
-      *outReturnPc = (pc24 + len) & 0x00ffffffu;
+      *out_return_pc = (pc24 + len) & 0x00ffffffu;
       return 1;
    }
    return 0;
 }
 
-int
-e9k_debug_should_break_now(void)
+int e9k_debug_should_break_now(void)
 {
-   return e9k_debug_breakNow;
+   return e9k_debug_break_now;
 }
 
-void
-e9k_debug_instruction_hook(unsigned int pc, unsigned int opcodeIn)
+void e9k_debug_instruction_hook(unsigned int pc, unsigned int opcode_in)
 {
 #ifdef EMU_M68K
    uint32_t pc24 = e9k_debug_mask_addr((uint32_t)pc);
-   uint16_t opcode = (uint16_t)opcodeIn;
-   uint64_t currentLocation = 0;
-   int hasCurrentLocation = 0;
-   e9k_debug_instructionCount++;
+   uint16_t opcode = (uint16_t)opcode_in;
+   uint64_t current_location = 0;
+   int has_current_location = 0;
+   e9k_debug_instruction_count++;
    if (e9k_debug_paused) {
       e9k_debug_request_break();
       return;
    }
-   if (e9k_debug_stepInstrAfter) {
+   if (e9k_debug_step_instr_after) {
       e9k_debug_request_break();
       return;
    }
    if ((opcode & 0xFFC0u) == 0x4E80u || (opcode & 0xFF00u) == 0x6100u) {
-      uint32_t returnPc = 0;
-      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &returnPc) &&
-          e9k_debug_callstackDepth < E9K_DEBUG_CALLSTACK_MAX) {
-         e9k_debug_callstack[e9k_debug_callstackDepth++] = pc24;
+      uint32_t return_pc = 0;
+      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &return_pc) &&
+          e9k_debug_callstack_depth < E9K_DEBUG_CALLSTACK_MAX) {
+         e9k_debug_callstack[e9k_debug_callstack_depth++] = pc24;
       }
    } else if (opcode == 0x4E75u || opcode == 0x4E74u || opcode == 0x4E73u || opcode == 0x4E77u) {
-      if (e9k_debug_callstackDepth > 0) {
-         e9k_debug_callstackDepth--;
+      if (e9k_debug_callstack_depth > 0) {
+         e9k_debug_callstack_depth--;
       }
-      if (e9k_debug_stepNext) {
-         e9k_debug_stepNextSkipOnce = 1;
+      if (e9k_debug_step_next_pending) {
+         e9k_debug_step_next_skip_once = 1;
       }
-      if (e9k_debug_stepOut) {
-         e9k_debug_stepOutSkipOnce = 1;
+      if (e9k_debug_step_out_pending) {
+         e9k_debug_step_out_skip_once = 1;
       }
    }
-   if (e9k_debug_stepInstr) {
-      e9k_debug_stepInstr = 0;
-      e9k_debug_stepInstrAfter = 1;
+   if (e9k_debug_step_instr_pending) {
+      e9k_debug_step_instr_pending = 0;
+      e9k_debug_step_instr_after = 1;
       return;
    }
-   if (e9k_debug_stepLine && !e9k_debug_stepNext && !e9k_debug_stepOut) {
-      if (e9k_debug_stepIntoPending) {
-         e9k_debug_stepIntoPending = 0;
+   if (e9k_debug_step_line_pending && !e9k_debug_step_next_pending && !e9k_debug_step_out_pending) {
+      if (e9k_debug_step_into_pending) {
+         e9k_debug_step_into_pending = 0;
          e9k_debug_request_break();
          return;
       }
       {
-         uint32_t returnPc = 0;
-         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &returnPc)) {
-            e9k_debug_stepIntoPending = 1;
+         uint32_t return_pc = 0;
+         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &return_pc)) {
+            e9k_debug_step_into_pending = 1;
             return;
          }
       }
    }
-   if (e9k_debug_stepLine) {
-      hasCurrentLocation = e9k_debug_resolve_source_location(pc24, &currentLocation);
+   if (e9k_debug_step_line_pending) {
+      has_current_location = e9k_debug_resolve_source_location(pc24, &current_location);
    }
-   if (e9k_debug_stepNext && !e9k_debug_stepNextReturnPcValid) {
-      if (hasCurrentLocation && e9k_debug_stepLineHasStart && currentLocation == e9k_debug_stepLineStart) {
-         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_stepNextReturnPc)) {
-            e9k_debug_stepNextReturnPcValid = 1;
+   if (e9k_debug_step_next_pending && !e9k_debug_step_next_return_pc_valid) {
+      if (has_current_location && e9k_debug_step_line_has_start && current_location == e9k_debug_step_line_start) {
+         if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_step_next_return_pc)) {
+            e9k_debug_step_next_return_pc_valid = 1;
          }
       }
    }
-   if (e9k_debug_stepNext && e9k_debug_stepNextSkipOnce) {
-      e9k_debug_stepNextSkipOnce = 0;
+   if (e9k_debug_step_next_pending && e9k_debug_step_next_skip_once) {
+      e9k_debug_step_next_skip_once = 0;
       return;
    }
-   if (e9k_debug_stepOut && e9k_debug_stepOutSkipOnce) {
-      e9k_debug_stepOutSkipOnce = 0;
+   if (e9k_debug_step_out_pending && e9k_debug_step_out_skip_once) {
+      e9k_debug_step_out_skip_once = 0;
       return;
    }
-   if (e9k_debug_stepLine) {
-      int shouldBreak = 0;
-      int stepNextReady;
-      int stepOutReady;
-      if (e9k_debug_stepNext && e9k_debug_stepNextReturnPcValid) {
-         if (pc24 != e9k_debug_stepNextReturnPc) {
+   if (e9k_debug_step_line_pending) {
+      int should_break = 0;
+      int step_next_ready;
+      int step_out_ready;
+      if (e9k_debug_step_next_pending && e9k_debug_step_next_return_pc_valid) {
+         if (pc24 != e9k_debug_step_next_return_pc) {
             goto skip_step_line_break;
          }
-         e9k_debug_stepNextReturnPcValid = 0;
+         e9k_debug_step_next_return_pc_valid = 0;
       }
-      if (hasCurrentLocation) {
-         if (!e9k_debug_stepLineHasStart) {
-            shouldBreak = 1;
-         } else if (currentLocation != e9k_debug_stepLineStart) {
-            shouldBreak = 1;
+      if (has_current_location) {
+         if (!e9k_debug_step_line_has_start) {
+            should_break = 1;
+         } else if (current_location != e9k_debug_step_line_start) {
+            should_break = 1;
          }
       }
-      stepNextReady = (!e9k_debug_stepNext || e9k_debug_callstackDepth <= e9k_debug_stepNextDepth);
-      stepOutReady = (!e9k_debug_stepOut || e9k_debug_callstackDepth <= e9k_debug_stepOutDepth);
-      if (shouldBreak && stepNextReady && stepOutReady) {
+      step_next_ready = (!e9k_debug_step_next_pending || e9k_debug_callstack_depth <= e9k_debug_step_next_depth);
+      step_out_ready = (!e9k_debug_step_out_pending || e9k_debug_callstack_depth <= e9k_debug_step_out_depth);
+      if (should_break && step_next_ready && step_out_ready) {
          e9k_debug_request_break();
          return;
       }
    }
 skip_step_line_break:
-   if (e9k_debug_skipBreakpointOnce) {
-      e9k_debug_skipBreakpointOnce = 0;
-      if (pc24 == e9k_debug_skipBreakpointPc) {
+   if (e9k_debug_skip_breakpoint_once) {
+      e9k_debug_skip_breakpoint_once = 0;
+      if (pc24 == e9k_debug_skip_breakpoint_pc) {
          return;
       }
    }
    if (e9k_debug_has_breakpoint(pc24)) {
       e9k_debug_request_break();
-      e9k_debug_breakpointHitLatched = 1;
-      e9k_debug_breakpointHitAddr = pc24;
+      e9k_debug_breakpoint_hit_latched = 1;
+      e9k_debug_breakpoint_hit_addr = pc24;
       return;
    }
 #else
    (void)pc;
-   (void)opcodeIn;
+   (void)opcode_in;
 #endif
 }
 
-RETRO_API void
-e9k_debug_pause(void)
+RETRO_API void e9k_debug_pause(void)
 {
    e9k_debug_request_break();
 }
 
-RETRO_API void
-e9k_debug_resume(void)
+RETRO_API void e9k_debug_resume(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 0;
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_skipBreakpointOnce = 0;
-   e9k_debug_skipBreakpointPc = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_skip_breakpoint_once = 0;
+   e9k_debug_skip_breakpoint_pc = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 #ifdef EMU_M68K
    {
       uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
       if (e9k_debug_has_breakpoint(pc24)) {
-         e9k_debug_skipBreakpointOnce = 1;
-         e9k_debug_skipBreakpointPc = pc24;
+         e9k_debug_skip_breakpoint_once = 1;
+         e9k_debug_skip_breakpoint_pc = pc24;
       }
    }
 #endif
 }
 
-RETRO_API int
-e9k_debug_is_paused(void)
+RETRO_API int e9k_debug_is_paused(void)
 {
    return e9k_debug_paused;
 }
 
-RETRO_API void
-e9k_debug_step_instr(void)
+RETRO_API void e9k_debug_step_instr(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_stepLine = 0;
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_stepInstr = 1;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_step_line_pending = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_step_instr_pending = 1;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 }
 
-RETRO_API void
-e9k_debug_step_line(void)
+RETRO_API void e9k_debug_step_line(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 1;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 1;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 #ifdef EMU_M68K
    {
       uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
-      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
-         e9k_debug_stepLineHasStart = 1;
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_step_line_start)) {
+         e9k_debug_step_line_has_start = 1;
       } else {
-         e9k_debug_stepLineHasStart = 0;
-         e9k_debug_stepLineStart = 0;
+         e9k_debug_step_line_has_start = 0;
+         e9k_debug_step_line_start = 0;
       }
    }
 #else
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
 #endif
 }
 
-RETRO_API void
-e9k_debug_step_next(void)
+RETRO_API void e9k_debug_step_next(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 1;
-   e9k_debug_stepNext = 1;
-   e9k_debug_stepNextDepth = e9k_debug_callstackDepth;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 0;
-   e9k_debug_stepOutDepth = 0;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 1;
+   e9k_debug_step_next_pending = 1;
+   e9k_debug_step_next_depth = e9k_debug_callstack_depth;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 0;
+   e9k_debug_step_out_depth = 0;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 #ifdef EMU_M68K
    {
       uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
       uint16_t opcode = (uint16_t)m68k_read_memory_16(pc24 & ~1u);
-      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
-         e9k_debug_stepLineHasStart = 1;
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_step_line_start)) {
+         e9k_debug_step_line_has_start = 1;
       } else {
-         e9k_debug_stepLineHasStart = 0;
-         e9k_debug_stepLineStart = 0;
+         e9k_debug_step_line_has_start = 0;
+         e9k_debug_step_line_start = 0;
       }
-      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_stepNextReturnPc)) {
-         e9k_debug_stepNextReturnPcValid = 1;
+      if (e9k_debug_try_get_call_return_pc(pc24, opcode, &e9k_debug_step_next_return_pc)) {
+         e9k_debug_step_next_return_pc_valid = 1;
       }
    }
 #else
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
 #endif
 }
 
-RETRO_API void
-e9k_debug_step_out(void)
+RETRO_API void e9k_debug_step_out(void)
 {
    e9k_debug_paused = 0;
-   e9k_debug_breakNow = 0;
-   e9k_debug_stepInstr = 0;
-   e9k_debug_stepInstrAfter = 0;
-   e9k_debug_stepLine = 1;
-   e9k_debug_stepNext = 0;
-   e9k_debug_stepNextDepth = 0;
-   e9k_debug_stepNextSkipOnce = 0;
-   e9k_debug_stepNextReturnPcValid = 0;
-   e9k_debug_stepNextReturnPc = 0;
-   e9k_debug_stepOut = 1;
-   e9k_debug_stepOutDepth = (e9k_debug_callstackDepth > 0) ? (e9k_debug_callstackDepth - 1u) : 0u;
-   e9k_debug_stepOutSkipOnce = 0;
-   e9k_debug_stepIntoPending = 0;
-   e9k_debug_breakpointHitLatched = 0;
+   e9k_debug_break_now = 0;
+   e9k_debug_step_instr_pending = 0;
+   e9k_debug_step_instr_after = 0;
+   e9k_debug_step_line_pending = 1;
+   e9k_debug_step_next_pending = 0;
+   e9k_debug_step_next_depth = 0;
+   e9k_debug_step_next_skip_once = 0;
+   e9k_debug_step_next_return_pc_valid = 0;
+   e9k_debug_step_next_return_pc = 0;
+   e9k_debug_step_out_pending = 1;
+   e9k_debug_step_out_depth = (e9k_debug_callstack_depth > 0) ? (e9k_debug_callstack_depth - 1u) : 0u;
+   e9k_debug_step_out_skip_once = 0;
+   e9k_debug_step_into_pending = 0;
+   e9k_debug_breakpoint_hit_latched = 0;
 #ifdef EMU_M68K
    {
       uint32_t pc24 = e9k_debug_mask_addr((uint32_t)m68k_get_reg(&PicoCpuMM68k, M68K_REG_PC));
-      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_stepLineStart)) {
-         e9k_debug_stepLineHasStart = 1;
+      if (e9k_debug_resolve_source_location(pc24, &e9k_debug_step_line_start)) {
+         e9k_debug_step_line_has_start = 1;
       } else {
-         e9k_debug_stepLineHasStart = 0;
-         e9k_debug_stepLineStart = 0;
+         e9k_debug_step_line_has_start = 0;
+         e9k_debug_step_line_start = 0;
       }
    }
 #else
-   e9k_debug_stepLineHasStart = 0;
-   e9k_debug_stepLineStart = 0;
+   e9k_debug_step_line_has_start = 0;
+   e9k_debug_step_line_start = 0;
 #endif
 }
 
-RETRO_API void
-e9k_debug_add_breakpoint(uint32_t addr)
+RETRO_API void e9k_debug_add_breakpoint(uint32_t addr)
 {
    uint32_t pc24 = e9k_debug_mask_addr(addr);
    if (e9k_debug_has_breakpoint(pc24)) {
       return;
    }
-   if (e9k_debug_breakpointCount >= sizeof(e9k_debug_breakpoints) / sizeof(e9k_debug_breakpoints[0])) {
+   if (e9k_debug_breakpoint_count >= sizeof(e9k_debug_breakpoints) / sizeof(e9k_debug_breakpoints[0])) {
       return;
    }
-   e9k_debug_breakpoints[e9k_debug_breakpointCount++] = pc24;
+   e9k_debug_breakpoints[e9k_debug_breakpoint_count++] = pc24;
 }
 
-RETRO_API void
-e9k_debug_remove_breakpoint(uint32_t addr)
+RETRO_API void e9k_debug_remove_breakpoint(uint32_t addr)
 {
    uint32_t pc24 = e9k_debug_mask_addr(addr);
    size_t i;
-   for (i = 0; i < e9k_debug_breakpointCount; ++i) {
+   for (i = 0; i < e9k_debug_breakpoint_count; ++i) {
       if (e9k_debug_breakpoints[i] == pc24) {
-         e9k_debug_breakpoints[i] = e9k_debug_breakpoints[e9k_debug_breakpointCount - 1];
-         e9k_debug_breakpointCount--;
+         e9k_debug_breakpoints[i] = e9k_debug_breakpoints[e9k_debug_breakpoint_count - 1];
+         e9k_debug_breakpoint_count--;
          return;
       }
    }
 }
 
-RETRO_API void
-e9k_debug_add_temp_breakpoint(uint32_t addr)
+RETRO_API void e9k_debug_add_temp_breakpoint(uint32_t addr)
 {
    e9k_debug_add_breakpoint(addr);
 }
 
-RETRO_API void
-e9k_debug_remove_temp_breakpoint(uint32_t addr)
+RETRO_API void e9k_debug_remove_temp_breakpoint(uint32_t addr)
 {
    e9k_debug_remove_breakpoint(addr);
 }
 
-RETRO_API void
-e9k_debug_clear_breakpoints(void)
+RETRO_API void e9k_debug_clear_breakpoints(void)
 {
-   e9k_debug_breakpointCount = 0;
+   e9k_debug_breakpoint_count = 0;
 }
 
-RETRO_API size_t
-e9k_debug_read_callstack(uint32_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_callstack(uint32_t *out, size_t cap)
 {
    if (!out || cap == 0) {
       return 0;
    }
-   size_t count = e9k_debug_callstackDepth;
+   size_t count = e9k_debug_callstack_depth;
    size_t i;
    if (count > cap) {
       count = cap;
@@ -974,8 +997,7 @@ e9k_debug_read_callstack(uint32_t *out, size_t cap)
    return count;
 }
 
-RETRO_API size_t
-e9k_debug_read_regs(uint32_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_regs(uint32_t *out, size_t cap)
 {
 #ifdef EMU_M68K
    static const int regs[] = {
@@ -999,8 +1021,8 @@ e9k_debug_read_regs(uint32_t *out, size_t cap)
       if (regs[i] == M68K_REG_SR) {
          value &= 0x0000ffffu;
       }
-      if (regs[i] == M68K_REG_PC && e9k_debug_paused && e9k_debug_breakpointHitLatched) {
-         value = e9k_debug_breakpointHitAddr;
+      if (regs[i] == M68K_REG_PC && e9k_debug_paused && e9k_debug_breakpoint_hit_latched) {
+         value = e9k_debug_breakpoint_hit_addr;
       }
       out[i] = value;
    }
@@ -1012,8 +1034,7 @@ e9k_debug_read_regs(uint32_t *out, size_t cap)
 #endif
 }
 
-RETRO_API size_t
-e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
 {
 #ifdef EMU_M68K
    size_t i;
@@ -1034,8 +1055,7 @@ e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
 #endif
 }
 
-RETRO_API int
-e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
+RETRO_API int e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
 {
 #ifdef EMU_M68K
    addr = e9k_debug_mask_addr(addr);
@@ -1065,8 +1085,7 @@ e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
 #endif
 }
 
-RETRO_API size_t
-e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
+RETRO_API size_t e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
 {
    int screenW;
    int screenH;
@@ -1087,6 +1106,7 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
    int spriteBottom[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
    int spriteLowPriority[E9K_DEBUG_MEGA_MAX_FRAME_SPRITES];
    int y;
+   int i;
    int h40Mode;
    if (!out || cap < sizeof(*out)) {
       return 0;
@@ -1148,8 +1168,8 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
    out->lineCount = lineCount;
    out->spriteLimitPerLine = spriteLimitPerLine;
    out->tileLimitPerLine = tileLimitPerLine;
-   out->frameSpriteUsed = (int)draw_frameSpriteUsed;
-   out->frameSpriteMax = (int)draw_frameSpriteMax;
+   out->frameSpriteUsed = (int)draw_frame_sprite_used;
+   out->frameSpriteMax = (int)draw_frame_sprite_max;
    memcpy(out->vdpRegs, Pico.video.reg, sizeof(out->vdpRegs));
    out->spriteEntryCount = 0;
 
@@ -1264,7 +1284,7 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
       if (spriteCount > MAX_LINE_SPRITES) {
          spriteCount = MAX_LINE_SPRITES;
       }
-      for (int i = 0; i < spriteCount; ++i) {
+      for (i = 0; i < spriteCount; ++i) {
          int spriteIndex = line[4 + i] & 0x7f;
          if (spriteIndex >= 0 && spriteIndex < entryCount) {
             spriteRendered[spriteIndex] = 1;
@@ -1272,11 +1292,12 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
       }
    }
 
-   for (int i = 0; i < entryCount; ++i) {
+   for (i = 0; i < entryCount; ++i) {
       int top;
       int bottom;
       int lineStart;
       int lineEnd;
+      int lineY;
       uint8_t flags = out->spriteEntries[i].flags;
       if (spriteRendered[i]) {
          flags |= E9K_DEBUG_MEGA_SPRITEFLAG_RENDERED;
@@ -1293,7 +1314,7 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
          lineStart = top;
          lineEnd = bottom;
          if (lineStart <= lineEnd) {
-            for (int lineY = lineStart; lineY <= lineEnd; ++lineY) {
+            for (lineY = lineStart; lineY <= lineEnd; ++lineY) {
                uint8_t lineFlags = out->lineFlags[lineY];
                if (lineFlags & E9K_DEBUG_MEGA_LINEFLAG_SPRITE_OVERFLOW) {
                   flags |= E9K_DEBUG_MEGA_SPRITEFLAG_OVERFLOW_SPRITE;
@@ -1313,8 +1334,7 @@ e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t 
    return sizeof(*out);
 }
 
-RETRO_API size_t
-e9k_debug_megadrive_get_roms(e9k_debug_rom_entry_t *out, size_t cap)
+RETRO_API size_t e9k_debug_megadrive_get_roms(e9k_debug_rom_entry_t *out, size_t cap)
 {
    e9k_debug_rom_entry_t entry;
 
@@ -1329,8 +1349,7 @@ e9k_debug_megadrive_get_roms(e9k_debug_rom_entry_t *out, size_t cap)
    return sizeof(entry);
 }
 
-RETRO_API size_t
-e9k_debug_disassemble_quick(uint32_t pc, char *out, size_t cap)
+RETRO_API size_t e9k_debug_disassemble_quick(uint32_t pc, char *out, size_t cap)
 {
 #ifdef EMU_M68K
    char line[128];
@@ -1357,65 +1376,59 @@ e9k_debug_disassemble_quick(uint32_t pc, char *out, size_t cap)
 #endif
 }
 
-RETRO_API void
-e9k_debug_set_source_location_resolver(int (*resolver)(uint32_t pc24, uint64_t *out_location, void *user), void *user)
+RETRO_API void e9k_debug_set_source_location_resolver(int (*resolver)(uint32_t pc24, uint64_t *out_location, void *user), void *user)
 {
-   e9k_debug_sourceLocationResolver = resolver;
-   e9k_debug_sourceLocationResolverUser = user;
+   e9k_debug_source_location_resolver = resolver;
+   e9k_debug_source_location_resolver_user = user;
 }
 
-RETRO_API void
-e9k_debug_set_debug_option(e9k_debug_option_t option, uint32_t argument, void *user)
+RETRO_API void e9k_debug_set_debug_option(e9k_debug_option_t option, uint32_t argument, void *user)
 {
    (void)option;
    (void)argument;
    (void)user;
 }
 
-RETRO_API void
-e9k_debug_reset_watchpoints(void)
+RETRO_API void e9k_debug_reset_watchpoints(void)
 {
    memset(e9k_debug_watchpoints, 0, sizeof(e9k_debug_watchpoints));
-   e9k_debug_watchpointEnabledMask = 0;
+   e9k_debug_watchpoint_enabled_mask = 0;
    memset(&e9k_debug_watchbreak, 0, sizeof(e9k_debug_watchbreak));
-   e9k_debug_watchbreakValid = 0;
-   e9k_debug_refreshMemoryHookFlags();
+   e9k_debug_watchbreak_valid = 0;
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API int
-e9k_debug_add_watchpoint(uint32_t addr, uint32_t opMask, uint32_t diffOperand, uint32_t valueOperand, uint32_t oldValueOperand, uint32_t sizeOperand, uint32_t addrMaskOperand)
+RETRO_API int e9k_debug_add_watchpoint(uint32_t addr, uint32_t op_mask, uint32_t diff_operand, uint32_t value_operand, uint32_t old_value_operand, uint32_t size_operand, uint32_t addr_mask_operand)
 {
    uint32_t i;
    for (i = 0; i < E9K_WATCHPOINT_COUNT; ++i) {
-      if (((e9k_debug_watchpointEnabledMask >> i) & 1u) == 0u) {
+      if (((e9k_debug_watchpoint_enabled_mask >> i) & 1u) == 0u) {
          e9k_debug_watchpoints[i].addr = addr;
-         e9k_debug_watchpoints[i].op_mask = opMask;
-         e9k_debug_watchpoints[i].diff_operand = diffOperand;
-         e9k_debug_watchpoints[i].value_operand = valueOperand;
-         e9k_debug_watchpoints[i].old_value_operand = oldValueOperand;
-         e9k_debug_watchpoints[i].size_operand = sizeOperand;
-         e9k_debug_watchpoints[i].addr_mask_operand = addrMaskOperand;
-         e9k_debug_watchpointEnabledMask |= (1ull << i);
-         e9k_debug_refreshMemoryHookFlags();
+         e9k_debug_watchpoints[i].op_mask = op_mask;
+         e9k_debug_watchpoints[i].diff_operand = diff_operand;
+         e9k_debug_watchpoints[i].value_operand = value_operand;
+         e9k_debug_watchpoints[i].old_value_operand = old_value_operand;
+         e9k_debug_watchpoints[i].size_operand = size_operand;
+         e9k_debug_watchpoints[i].addr_mask_operand = addr_mask_operand;
+         e9k_debug_watchpoint_enabled_mask |= (1ull << i);
+         e9k_debug_refresh_memory_hook_flags();
          return (int)i;
       }
    }
    return -1;
 }
 
-RETRO_API void
-e9k_debug_remove_watchpoint(uint32_t index)
+RETRO_API void e9k_debug_remove_watchpoint(uint32_t index)
 {
    if (index >= E9K_WATCHPOINT_COUNT) {
       return;
    }
-   e9k_debug_watchpointEnabledMask &= ~(1ull << index);
+   e9k_debug_watchpoint_enabled_mask &= ~(1ull << index);
    memset(&e9k_debug_watchpoints[index], 0, sizeof(e9k_debug_watchpoints[index]));
-   e9k_debug_refreshMemoryHookFlags();
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API size_t
-e9k_debug_read_watchpoints(e9k_debug_watchpoint_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_watchpoints(e9k_debug_watchpoint_t *out, size_t cap)
 {
    size_t i;
    size_t count;
@@ -1429,67 +1442,60 @@ e9k_debug_read_watchpoints(e9k_debug_watchpoint_t *out, size_t cap)
    return count;
 }
 
-RETRO_API uint64_t
-e9k_debug_get_watchpoint_enabled_mask(void)
+RETRO_API uint64_t e9k_debug_get_watchpoint_enabled_mask(void)
 {
-   return e9k_debug_watchpointEnabledMask;
+   return e9k_debug_watchpoint_enabled_mask;
 }
 
-RETRO_API void
-e9k_debug_set_watchpoint_enabled_mask(uint64_t mask)
+RETRO_API void e9k_debug_set_watchpoint_enabled_mask(uint64_t mask)
 {
-   uint64_t validMask = e9k_debug_maskForCount(E9K_WATCHPOINT_COUNT);
-   e9k_debug_watchpointEnabledMask = mask & validMask;
-   e9k_debug_refreshMemoryHookFlags();
+   uint64_t valid_mask = e9k_debug_mask_for_count(E9K_WATCHPOINT_COUNT);
+   e9k_debug_watchpoint_enabled_mask = mask & valid_mask;
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API int
-e9k_debug_consume_watchbreak(e9k_debug_watchbreak_t *out)
+RETRO_API int e9k_debug_consume_watchbreak(e9k_debug_watchbreak_t *out)
 {
    (void)out;
    return 0;
 }
 
-RETRO_API void
-e9k_debug_reset_protects(void)
+RETRO_API void e9k_debug_reset_protects(void)
 {
    memset(e9k_debug_protects, 0, sizeof(e9k_debug_protects));
-   e9k_debug_protectEnabledMask = 0;
-   e9k_debug_refreshMemoryHookFlags();
+   e9k_debug_protect_enabled_mask = 0;
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API int
-e9k_debug_add_protect(uint32_t addr, uint32_t sizeBits, uint32_t mode, uint32_t value)
+RETRO_API int e9k_debug_add_protect(uint32_t addr, uint32_t size_bits, uint32_t mode, uint32_t value)
 {
    uint32_t i;
    for (i = 0; i < E9K_PROTECT_COUNT; ++i) {
-      if (((e9k_debug_protectEnabledMask >> i) & 1u) == 0u) {
+      if (((e9k_debug_protect_enabled_mask >> i) & 1u) == 0u) {
          e9k_debug_protects[i].addr = addr;
          e9k_debug_protects[i].addrMask = 0xffffffffu;
-         e9k_debug_protects[i].sizeBits = sizeBits;
+         e9k_debug_protects[i].sizeBits = size_bits;
          e9k_debug_protects[i].mode = mode;
          e9k_debug_protects[i].value = value;
-         e9k_debug_protectEnabledMask |= (1ull << i);
-         e9k_debug_refreshMemoryHookFlags();
+         e9k_debug_protect_enabled_mask |= (1ull << i);
+         e9k_debug_refresh_memory_hook_flags();
          return (int)i;
       }
    }
    return -1;
 }
 
-RETRO_API void
-e9k_debug_remove_protect(uint32_t index)
+RETRO_API void e9k_debug_remove_protect(uint32_t index)
 {
    if (index >= E9K_PROTECT_COUNT) {
       return;
    }
-   e9k_debug_protectEnabledMask &= ~(1ull << index);
+   e9k_debug_protect_enabled_mask &= ~(1ull << index);
    memset(&e9k_debug_protects[index], 0, sizeof(e9k_debug_protects[index]));
-   e9k_debug_refreshMemoryHookFlags();
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API size_t
-e9k_debug_read_protects(e9k_debug_protect_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_protects(e9k_debug_protect_t *out, size_t cap)
 {
    size_t i;
    size_t count;
@@ -1503,41 +1509,35 @@ e9k_debug_read_protects(e9k_debug_protect_t *out, size_t cap)
    return count;
 }
 
-RETRO_API uint64_t
-e9k_debug_get_protect_enabled_mask(void)
+RETRO_API uint64_t e9k_debug_get_protect_enabled_mask(void)
 {
-   return e9k_debug_protectEnabledMask;
+   return e9k_debug_protect_enabled_mask;
 }
 
-RETRO_API void
-e9k_debug_set_protect_enabled_mask(uint64_t mask)
+RETRO_API void e9k_debug_set_protect_enabled_mask(uint64_t mask)
 {
-   uint64_t validMask = e9k_debug_maskForCount(E9K_PROTECT_COUNT);
-   e9k_debug_protectEnabledMask = mask & validMask;
-   e9k_debug_refreshMemoryHookFlags();
+   uint64_t valid_mask = e9k_debug_mask_for_count(E9K_PROTECT_COUNT);
+   e9k_debug_protect_enabled_mask = mask & valid_mask;
+   e9k_debug_refresh_memory_hook_flags();
 }
 
-RETRO_API void
-e9k_debug_profiler_start(int stream)
+RETRO_API void e9k_debug_profiler_start(int stream)
 {
-   e9k_debug_profilerEnabled = 1;
-   e9k_debug_profilerStream = stream;
+   e9k_debug_profiler_enabled = 1;
+   e9k_debug_profiler_stream = stream;
 }
 
-RETRO_API void
-e9k_debug_profiler_stop(void)
+RETRO_API void e9k_debug_profiler_stop(void)
 {
-   e9k_debug_profilerEnabled = 0;
+   e9k_debug_profiler_enabled = 0;
 }
 
-RETRO_API int
-e9k_debug_profiler_is_enabled(void)
+RETRO_API int e9k_debug_profiler_is_enabled(void)
 {
-   return e9k_debug_profilerEnabled;
+   return e9k_debug_profiler_enabled;
 }
 
-RETRO_API size_t
-e9k_debug_profiler_stream_next(char *out, size_t cap)
+RETRO_API size_t e9k_debug_profiler_stream_next(char *out, size_t cap)
 {
    if (!out || cap == 0) {
       return 0;
@@ -1546,8 +1546,7 @@ e9k_debug_profiler_stream_next(char *out, size_t cap)
    return 0;
 }
 
-RETRO_API size_t
-e9k_debug_read_checkpoints(e9k_debug_checkpoint_t *out, size_t cap)
+RETRO_API size_t e9k_debug_read_checkpoints(e9k_debug_checkpoint_t *out, size_t cap)
 {
    size_t i;
    size_t count;
@@ -1561,28 +1560,24 @@ e9k_debug_read_checkpoints(e9k_debug_checkpoint_t *out, size_t cap)
    return count;
 }
 
-RETRO_API void
-e9k_debug_reset_checkpoints(void)
+RETRO_API void e9k_debug_reset_checkpoints(void)
 {
    memset(e9k_debug_checkpoints, 0, sizeof(e9k_debug_checkpoints));
 }
 
-RETRO_API void
-e9k_debug_set_checkpoint_enabled(int enabled)
+RETRO_API void e9k_debug_set_checkpoint_enabled(int enabled)
 {
-   e9k_debug_checkpointEnabled = enabled ? 1 : 0;
+   e9k_debug_checkpoint_enabled = enabled ? 1 : 0;
 }
 
-RETRO_API int
-e9k_debug_get_checkpoint_enabled(void)
+RETRO_API int e9k_debug_get_checkpoint_enabled(void)
 {
-   return e9k_debug_checkpointEnabled;
+   return e9k_debug_checkpoint_enabled;
 }
 
-RETRO_API uint64_t
-e9k_debug_read_cycle_count(void)
+RETRO_API uint64_t e9k_debug_read_cycle_count(void)
 {
-   return e9k_debug_instructionCount;
+   return e9k_debug_instruction_count;
 }
 
 char **g_argv;
@@ -3136,8 +3131,9 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *i
 
 void retro_unload_game(void)
 {
-    e9k_debug_reset_state();
-    libretro_mem_AHW = 0;
+   e9k_debug_reset_state();
+   e9k_debug_megadrive_clear_palette_greyscale();
+   libretro_mem_AHW = 0;
 }
 
 unsigned retro_get_region(void)
@@ -3229,6 +3225,7 @@ size_t retro_get_memory_size(unsigned type)
 void retro_reset(void)
 {
    e9k_debug_reset_state();
+   e9k_debug_megadrive_clear_palette_greyscale();
    PicoReset();
 }
 
@@ -3893,8 +3890,8 @@ void retro_run(void)
    }
 
    PicoFrame();
-   if (e9k_debug_vblankCb) {
-      e9k_debug_vblankCb(e9k_debug_vblankUser);
+   if (e9k_debug_vblank_cb) {
+      e9k_debug_vblank_cb(e9k_debug_vblank_user);
    }
 
    /* Check whether frontend needs to be notified
@@ -3951,12 +3948,15 @@ void retro_run(void)
       // Rotate CLUT. PS2 is special since entries in CLUT are not in sequence.
       unsigned short int *pal=(void *)retro_palette;
       for (i = 0; i < 256; i+=8) {
-         if ((i&0x18) == 0x08)
-            memcpy(pal+i,Pico.est.HighPal+i+8,16);
-         else if ((i&0x18) == 0x10)
-            memcpy(pal+i,Pico.est.HighPal+i-8,16);
-         else
-            memcpy(pal+i,Pico.est.HighPal+i,16);
+         int j;
+         for (j = 0; j < 8; ++j) {
+            unsigned src = i + j;
+            if ((i&0x18) == 0x08)
+               src = i + 8 + j;
+            else if ((i&0x18) == 0x10)
+               src = i - 8 + j;
+            pal[i + j] = e9k_debug_megadrive_palette_color(src, Pico.est.HighPal[src]);
+         }
       }
    }
 #else
@@ -3979,10 +3979,14 @@ void retro_run(void)
       /* Copy, and skip the leftmost 8 columns again */
       for (i = 0; i < vout_height; i++, ps += 8) {
          for (x = 0; x < vout_width; x+=4) {
-            *pd++ = pal[*ps++];
-            *pd++ = pal[*ps++];
-            *pd++ = pal[*ps++];
-            *pd++ = pal[*ps++];
+            unsigned index = *ps++;
+            *pd++ = e9k_debug_megadrive_palette_color(index, pal[index]);
+            index = *ps++;
+            *pd++ = e9k_debug_megadrive_palette_color(index, pal[index]);
+            index = *ps++;
+            *pd++ = e9k_debug_megadrive_palette_color(index, pal[index]);
+            index = *ps++;
+            *pd++ = e9k_debug_megadrive_palette_color(index, pal[index]);
          }
          ps += 320-vout_width; /* Advance to next line in case of 32col mode */
       }

@@ -58,11 +58,19 @@ int HighColIncrement;
 static u16 DefOutBuff[320*2] ALIGNED(4);
 void *DrawLineDestBase = DefOutBuff;
 int DrawLineDestIncrement;
+unsigned short (*draw_palette_debug_color)(unsigned index, unsigned short color);
 
 static u32 HighCacheA[41*2+1]; // caches for high layers
 static u32 HighCacheB[41*2+1];
 static s32 HighPreSpr[128*2*2]; // slightly preprocessed sprites (2 banks a 128)
 static int HighPreSprBank;
+
+static u16 palette_debug_color(unsigned int index, u16 color)
+{
+  if (draw_palette_debug_color)
+    return draw_palette_debug_color(index, color);
+  return color;
+}
 
 u32 VdpSATCache[2*128];  // VDP sprite cache (1st 32 sprite attr bits)
 
@@ -103,8 +111,8 @@ u32 VdpSATCache[2*128];  // VDP sprite cache (1st 32 sprite attr bits)
 // sprite cache. stores results of sprite parsing for each display line:
 // [visible_sprites_count, sprl_flags, tile_count, sprites_processed, sprite_idx[sprite_count], last_width]
 unsigned char HighLnSpr[240][4+MAX_LINE_SPRITES+1];
-unsigned draw_frameSpriteUsed;
-unsigned draw_frameSpriteMax;
+unsigned draw_frame_sprite_used;
+unsigned draw_frame_sprite_max;
 
 int rendstatus_old;
 int rendlines;
@@ -1186,7 +1194,7 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
   s32 *pd = HighPreSpr + HighPreSprBank*2;
   int max_sprites = 80, max_width = 328;
   int max_line_sprites = 20; // 20 sprites, 40 tiles
-  int frameSpriteUsed = 0;
+  int frame_sprite_used = 0;
 
   // SAT scanning is one line ahead, but don't overshoot. Technically, SAT
   // parsing for line 0 is on the last line of the previous frame.
@@ -1202,7 +1210,7 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
     max_sprites = 64, max_line_sprites = 16, max_width = 264;
   if (*est->PicoOpt & POPT_DIS_SPRITE_LIM)
     max_line_sprites = MAX_LINE_SPRITES;
-  draw_frameSpriteMax = (unsigned)max_sprites;
+  draw_frame_sprite_max = (unsigned)max_sprites;
 
   sh = pvid->reg[0xC]&8; // shadow/hilight?
 
@@ -1293,14 +1301,14 @@ static NOINLINE void ParseSprites(int max_lines, int limit)
     if (!link) break; // End of sprites
   }
   if (u >= max_sprites) {
-    frameSpriteUsed = max_sprites;
+    frame_sprite_used = max_sprites;
   } else {
-    frameSpriteUsed = u + 1;
+    frame_sprite_used = u + 1;
   }
-  if (frameSpriteUsed < 0) {
-    frameSpriteUsed = 0;
+  if (frame_sprite_used < 0) {
+    frame_sprite_used = 0;
   }
-  draw_frameSpriteUsed = (unsigned)frameSpriteUsed;
+  draw_frame_sprite_used = (unsigned)frame_sprite_used;
   *pd = 0;
 
   // fetching sprite pixels isn't done while display is disabled during HBLANK
@@ -1395,6 +1403,7 @@ void BgcDMA(struct PicoEState *est)
   int xl = (len == 320 ? 38 : 33); // DMA slots during HSYNC
   int upscale = (est->rendstatus & PDRAW_SOFTSCALE) && len < 320;
   u16 *q = upscale ? DefOutBuff : pd;
+  unsigned int bg_index = Pico.video.reg[7] & 0x3f;
   int i, l = len;
   u16 t;
 
@@ -1411,12 +1420,12 @@ void BgcDMA(struct PicoEState *est)
   for (i = BgcDMAoffs; i < l; i += 2) {
     // TODO use ps to overwrite only real bg pixels
     t = BgcDMAbase[BgcDMAsrc++ & BgcDMAmask];
-    q[i] = q[i+1] = PXCONV(t);
+    q[i] = q[i+1] = palette_debug_color(bg_index, PXCONV(t));
   }
   BgcDMAsrc += xl; // HSYNC DMA
   BgcDMAoffs = 0;
 
-  t = PXCONV(PicoMem.cram[Pico.video.reg[7] & 0x3f]);
+  t = palette_debug_color(bg_index, PXCONV(PicoMem.cram[bg_index]));
   while (i < len) q[i++] = t; // fill partial line with BG
 
   if (upscale) {
@@ -1521,6 +1530,8 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
   unsigned short *pd=est->DrawLineDest;
   unsigned char  *ps=est->HighCol+8;
   unsigned short *pal=est->HighPal;
+  unsigned short debugPal[0x100];
+  unsigned int i;
   int len;
 
   if (DrawLineDestIncrement == 0)
@@ -1530,6 +1541,12 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
     return BgcDMA(est);
 
   PicoDrawUpdateHighPal();
+
+  if (draw_palette_debug_color) {
+    for (i = 0; i < 0x100; i++)
+      debugPal[i] = palette_debug_color(i, pal[i]);
+    pal = debugPal;
+  }
 
   len = 256;
   if (!(PicoIn.AHW & PAHW_8BIT) && (est->Pico->video.reg[12]&1))

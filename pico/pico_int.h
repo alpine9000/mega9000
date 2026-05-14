@@ -734,8 +734,9 @@ extern int (*PicoScanBegin)(unsigned int num);
 extern int (*PicoScanEnd)(unsigned int num);
 #define MAX_LINE_SPRITES 27	// +1 last sprite width, +4 hdr; total 32
 extern unsigned char HighLnSpr[240][4+MAX_LINE_SPRITES+1];
-extern unsigned draw_frameSpriteUsed;
-extern unsigned draw_frameSpriteMax;
+extern unsigned draw_frame_sprite_used;
+extern unsigned draw_frame_sprite_max;
+extern unsigned short (*draw_palette_debug_color)(unsigned index, unsigned short color);
 extern unsigned char *HighColBase;
 extern int HighColIncrement;
 extern void *DrawLineDestBase;

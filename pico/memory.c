@@ -1262,91 +1262,91 @@ unsigned int (*pm68k_read_memory_32)(unsigned int address) = NULL;
 void (*pm68k_write_memory_8) (unsigned int address, unsigned char  value) = NULL;
 void (*pm68k_write_memory_16)(unsigned int address, unsigned short value) = NULL;
 void (*pm68k_write_memory_32)(unsigned int address, unsigned int   value) = NULL;
-extern void e9k_debug_watchpoint_read(unsigned int addr, unsigned int value, unsigned int sizeBits);
-extern void e9k_debug_watchpoint_write(unsigned int addr, unsigned int value, unsigned int oldValue, unsigned int sizeBits, int oldValueValid);
-extern void e9k_debug_protect_filter_write(unsigned int addr, unsigned int sizeBits, unsigned int oldValue, int oldValueValid, unsigned int *inoutValue);
-extern int e9k_debug_protect_should_block_write(unsigned int addr, unsigned int sizeBits);
-extern int e9k_debug_watchReadHooksEnabled;
-extern int e9k_debug_watchWriteHooksEnabled;
-extern int e9k_debug_protectHooksEnabled;
+extern void e9k_debug_watchpoint_read(unsigned int addr, unsigned int value, unsigned int size_bits);
+extern void e9k_debug_watchpoint_write(unsigned int addr, unsigned int value, unsigned int old_value, unsigned int size_bits, int old_value_valid);
+extern void e9k_debug_protect_filter_write(unsigned int addr, unsigned int size_bits, unsigned int old_value, int old_value_valid, unsigned int *inout_value);
+extern int e9k_debug_protect_should_block_write(unsigned int addr, unsigned int size_bits);
+extern int e9k_debug_watch_read_hooks_enabled;
+extern int e9k_debug_watch_write_hooks_enabled;
+extern int e9k_debug_protect_hooks_enabled;
 
 /* it appears that Musashi doesn't always mask the unused bits */
 unsigned int m68k_read_memory_8 (unsigned int address)
 {
-  unsigned int readValue = pm68k_read_memory_8(address) & 0xff;
-  if (e9k_debug_watchReadHooksEnabled) {
-    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 8);
+  unsigned int read_value = pm68k_read_memory_8(address) & 0xff;
+  if (e9k_debug_watch_read_hooks_enabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, read_value, 8);
   }
-  return readValue;
+  return read_value;
 }
 unsigned int m68k_read_memory_16(unsigned int address)
 {
-  unsigned int readValue = pm68k_read_memory_16(address) & 0xffff;
-  if (e9k_debug_watchReadHooksEnabled) {
-    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 16);
+  unsigned int read_value = pm68k_read_memory_16(address) & 0xffff;
+  if (e9k_debug_watch_read_hooks_enabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, read_value, 16);
   }
-  return readValue;
+  return read_value;
 }
 unsigned int m68k_read_memory_32(unsigned int address)
 {
-  unsigned int readValue = pm68k_read_memory_32(address);
-  if (e9k_debug_watchReadHooksEnabled) {
-    e9k_debug_watchpoint_read(address & 0x00ffffffu, readValue, 32);
+  unsigned int read_value = pm68k_read_memory_32(address);
+  if (e9k_debug_watch_read_hooks_enabled) {
+    e9k_debug_watchpoint_read(address & 0x00ffffffu, read_value, 32);
   }
-  return readValue;
+  return read_value;
 }
 void m68k_write_memory_8 (unsigned int address, unsigned int value)
 {
   unsigned int addr24 = address & 0x00ffffffu;
-  unsigned int writeValue = value & 0xff;
-  if (e9k_debug_protectHooksEnabled) {
+  unsigned int write_value = value & 0xff;
+  if (e9k_debug_protect_hooks_enabled) {
     if (e9k_debug_protect_should_block_write(addr24, 8)) {
-      if (e9k_debug_watchWriteHooksEnabled) {
-        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 8, 0);
+      if (e9k_debug_watch_write_hooks_enabled) {
+        e9k_debug_watchpoint_write(addr24, write_value, 0u, 8, 0);
       }
       return;
     }
-    e9k_debug_protect_filter_write(addr24, 8, 0u, 0, &writeValue);
+    e9k_debug_protect_filter_write(addr24, 8, 0u, 0, &write_value);
   }
-  pm68k_write_memory_8(address, (u8)writeValue);
-  if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 8, 0);
+  pm68k_write_memory_8(address, (u8)write_value);
+  if (e9k_debug_watch_write_hooks_enabled) {
+    e9k_debug_watchpoint_write(addr24, write_value, 0u, 8, 0);
   }
 }
 void m68k_write_memory_16(unsigned int address, unsigned int value)
 {
   unsigned int addr24 = address & 0x00ffffffu;
-  unsigned int writeValue = value & 0xffff;
-  if (e9k_debug_protectHooksEnabled) {
+  unsigned int write_value = value & 0xffff;
+  if (e9k_debug_protect_hooks_enabled) {
     if (e9k_debug_protect_should_block_write(addr24, 16)) {
-      if (e9k_debug_watchWriteHooksEnabled) {
-        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 16, 0);
+      if (e9k_debug_watch_write_hooks_enabled) {
+        e9k_debug_watchpoint_write(addr24, write_value, 0u, 16, 0);
       }
       return;
     }
-    e9k_debug_protect_filter_write(addr24, 16, 0u, 0, &writeValue);
+    e9k_debug_protect_filter_write(addr24, 16, 0u, 0, &write_value);
   }
-  pm68k_write_memory_16(address, (u16)writeValue);
-  if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 16, 0);
+  pm68k_write_memory_16(address, (u16)write_value);
+  if (e9k_debug_watch_write_hooks_enabled) {
+    e9k_debug_watchpoint_write(addr24, write_value, 0u, 16, 0);
   }
 }
 void m68k_write_memory_32(unsigned int address, unsigned int value)
 {
   unsigned int addr24 = address & 0x00ffffffu;
-  unsigned int writeValue = value;
-  if (e9k_debug_protectHooksEnabled) {
+  unsigned int write_value = value;
+  if (e9k_debug_protect_hooks_enabled) {
     if (e9k_debug_protect_should_block_write(addr24, 32)) {
-      if (e9k_debug_watchWriteHooksEnabled) {
-        e9k_debug_watchpoint_write(addr24, writeValue, 0u, 32, 0);
+      if (e9k_debug_watch_write_hooks_enabled) {
+        e9k_debug_watchpoint_write(addr24, write_value, 0u, 32, 0);
       }
       return;
     }
-    e9k_debug_protect_filter_write(addr24, 32, 0u, 0, &writeValue);
+    e9k_debug_protect_filter_write(addr24, 32, 0u, 0, &write_value);
   }
-  pm68k_write_memory_32(address, writeValue);
-  if (e9k_debug_watchWriteHooksEnabled) {
-    e9k_debug_watchpoint_write(addr24, writeValue, 0u, 32, 0);
+  pm68k_write_memory_32(address, write_value);
+  if (e9k_debug_watch_write_hooks_enabled) {
+    e9k_debug_watchpoint_write(addr24, write_value, 0u, 32, 0);
   }
 }
 
