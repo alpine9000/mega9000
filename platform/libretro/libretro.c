@@ -85,6 +85,7 @@ static uint64_t page_table[2] = {0, 0};
 #include "../common/input_pico.h"
 #include "../common/version.h"
 #include "../../../e9k-lib/e9k-lib.h"
+#include "../../../e9k-lib/e9k-geo.h"
 #include "../../../e9k-lib/e9k-mega.h"
 #include <libretro.h>
 #include <compat/strcasestr.h>
@@ -1065,7 +1066,7 @@ e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
 }
 
 RETRO_API size_t
-e9k_debug_mega_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
+e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
 {
    int screenW;
    int screenH;
@@ -1149,6 +1150,7 @@ e9k_debug_mega_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
    out->tileLimitPerLine = tileLimitPerLine;
    out->frameSpriteUsed = (int)draw_frameSpriteUsed;
    out->frameSpriteMax = (int)draw_frameSpriteMax;
+   memcpy(out->vdpRegs, Pico.video.reg, sizeof(out->vdpRegs));
    out->spriteEntryCount = 0;
 
    for (y = 0; y < E9K_DEBUG_MEGA_MAX_FRAME_SPRITES; ++y) {
@@ -1223,6 +1225,10 @@ e9k_debug_mega_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
       entry->height = (uint16_t)spriteH;
       entry->satIndex = (uint16_t)link;
       entry->link = (uint16_t)nextLink;
+      entry->tileIndex = (uint16_t)(code2 & 0x07ff);
+      entry->palette = (uint8_t)((code2 >> 13) & 0x03);
+      entry->widthTiles = (uint8_t)widthTiles;
+      entry->heightTiles = (uint8_t)heightTiles;
       entry->flags = flags;
       entry->_reserved[0] = 0;
       entry->_reserved[1] = 0;
@@ -1305,6 +1311,22 @@ e9k_debug_mega_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
    }
 
    return sizeof(*out);
+}
+
+RETRO_API size_t
+e9k_debug_megadrive_get_roms(e9k_debug_rom_entry_t *out, size_t cap)
+{
+   e9k_debug_rom_entry_t entry;
+
+   if (!out || cap < sizeof(*out) || !Pico.rom || Pico.romsize == 0) {
+      return 0;
+   }
+   memset(&entry, 0, sizeof(entry));
+   snprintf(entry.label, sizeof(entry.label), "ROM");
+   entry.data = Pico.rom;
+   entry.size = Pico.romsize;
+   memcpy(out, &entry, sizeof(entry));
+   return sizeof(entry);
 }
 
 RETRO_API size_t
