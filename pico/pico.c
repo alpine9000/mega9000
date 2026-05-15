@@ -277,7 +277,7 @@ PICO_INTERNAL void PicoSyncZ80(unsigned int m68k_cycles_done)
     Pico.t.z80c_aim, Pico.t.z80c_aim * 15 / 7 / 488);
 
   if (cnt > 0)
-    Pico.t.z80c_cnt += z80_run(cnt);
+    Pico.t.z80c_cnt += mega_z80_debug_run(cnt);
 
   pprof_end(z80);
 }

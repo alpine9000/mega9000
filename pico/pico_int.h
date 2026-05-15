@@ -1015,6 +1015,7 @@ PICO_INTERNAL void z80_pack(void *data);
 PICO_INTERNAL int  z80_unpack(const void *data);
 PICO_INTERNAL void z80_reset(void);
 PICO_INTERNAL void z80_exit(void);
+PICO_INTERNAL int  mega_z80_debug_run(int cycles);
 
 // cd/misc.c
 PICO_INTERNAL_ASM void wram_2M_to_1M(unsigned char *m);

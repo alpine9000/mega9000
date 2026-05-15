@@ -90,6 +90,21 @@ static uint64_t page_table[2] = {0, 0};
 #include <libretro.h>
 #include <compat/strcasestr.h>
 
+enum {
+   E9K_DEBUG_MEGA_PROCESSOR_68K = 0,
+   E9K_DEBUG_MEGA_PROCESSOR_Z80 = 1
+};
+
+extern size_t mega_z80_debug_read_regs(e9k_debug_processor_reg_t *out, size_t cap);
+extern size_t mega_z80_debug_read_memory(u32 addr, u8 *out, size_t cap);
+extern int mega_z80_debug_write_memory(u32 addr, u32 value, size_t size);
+extern size_t mega_z80_debug_disassemble(u32 pc, char *out, size_t cap);
+extern void mega_z80_debug_add_breakpoint(u32 addr);
+extern void mega_z80_debug_remove_breakpoint(u32 addr);
+extern void mega_z80_debug_suppress_breakpoint_at_pc(void);
+extern int mega_z80_debug_step_instruction(void);
+extern void mega_z80_debug_reset(void);
+
 static retro_log_printf_t log_cb;
 static retro_video_refresh_t video_cb;
 static retro_input_poll_t input_poll_cb;
@@ -210,6 +225,7 @@ static void e9k_debug_reset_state(void)
    e9k_debug_watch_read_hooks_enabled = 0;
    e9k_debug_watch_write_hooks_enabled = 0;
    e9k_debug_protect_hooks_enabled = 0;
+   mega_z80_debug_reset();
 }
 
 static uint32_t e9k_debug_mask_value(uint32_t value, uint32_t size_bits)
@@ -966,6 +982,34 @@ RETRO_API void e9k_debug_remove_breakpoint(uint32_t addr)
    }
 }
 
+RETRO_API void e9k_debug_add_processor_breakpoint(uint32_t processor_id, uint32_t addr)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         e9k_debug_add_breakpoint(addr);
+         break;
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         mega_z80_debug_add_breakpoint(addr);
+         break;
+      default:
+         break;
+   }
+}
+
+RETRO_API void e9k_debug_remove_processor_breakpoint(uint32_t processor_id, uint32_t addr)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         e9k_debug_remove_breakpoint(addr);
+         break;
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         mega_z80_debug_remove_breakpoint(addr);
+         break;
+      default:
+         break;
+   }
+}
+
 RETRO_API void e9k_debug_add_temp_breakpoint(uint32_t addr)
 {
    e9k_debug_add_breakpoint(addr);
@@ -1034,6 +1078,112 @@ RETRO_API size_t e9k_debug_read_regs(uint32_t *out, size_t cap)
 #endif
 }
 
+static void e9k_debug_set_processor_reg(e9k_debug_processor_reg_t *reg, const char *name, uint64_t value, uint8_t bits)
+{
+   memset(reg, 0, sizeof(*reg));
+   strncpy(reg->name, name, sizeof(reg->name) - 1);
+   reg->value = value;
+   reg->bits = bits;
+}
+
+static size_t e9k_debug_read_m68k_processor_regs(e9k_debug_processor_reg_t *out, size_t cap)
+{
+#ifdef EMU_M68K
+   static const int regs[] = {
+      M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3,
+      M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+      M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3,
+      M68K_REG_A4, M68K_REG_A5, M68K_REG_A6, M68K_REG_A7,
+      M68K_REG_SR, M68K_REG_PC
+   };
+   static const char *names[] = {
+      "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7",
+      "A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+      "SR", "PC"
+   };
+   size_t i;
+   size_t count;
+
+   if (!out || cap == 0) {
+      return 0;
+   }
+   count = sizeof(regs) / sizeof(regs[0]);
+   if (count > cap) {
+      count = cap;
+   }
+   for (i = 0; i < count; ++i) {
+      uint32_t value = (uint32_t)m68k_get_reg(&PicoCpuMM68k, regs[i]);
+      uint8_t bits = 32;
+      if (regs[i] == M68K_REG_SR) {
+         value &= 0xffffu;
+         bits = 16;
+      } else if (regs[i] == M68K_REG_PC) {
+         value &= 0x00ffffffu;
+         bits = 24;
+         if (e9k_debug_paused && e9k_debug_breakpoint_hit_latched) {
+            value = e9k_debug_breakpoint_hit_addr;
+         }
+      }
+      e9k_debug_set_processor_reg(&out[i], names[i], value, bits);
+   }
+   return count;
+#else
+   (void)out;
+   (void)cap;
+   return 0;
+#endif
+}
+
+RETRO_API size_t e9k_debug_read_processors(e9k_debug_processor_info_t *out, size_t cap)
+{
+   static const e9k_debug_processor_info_t processors[] = {
+      {
+         .id = E9K_DEBUG_MEGA_PROCESSOR_68K,
+         .name = "M68000",
+         .role = "main",
+         .addressBits = 24,
+         .flags = E9K_DEBUG_PROCESSOR_PRIMARY |
+                  E9K_DEBUG_PROCESSOR_CAN_STEP |
+                  E9K_DEBUG_PROCESSOR_CAN_BREAKPOINT |
+                  E9K_DEBUG_PROCESSOR_CAN_DISASSEMBLE |
+                  E9K_DEBUG_PROCESSOR_CAN_WRITE_MEMORY
+      },
+      {
+         .id = E9K_DEBUG_MEGA_PROCESSOR_Z80,
+         .name = "Z80",
+         .role = "audio",
+         .addressBits = 16,
+         .flags = E9K_DEBUG_PROCESSOR_CAN_STEP |
+                  E9K_DEBUG_PROCESSOR_CAN_BREAKPOINT |
+                  E9K_DEBUG_PROCESSOR_CAN_DISASSEMBLE |
+                  E9K_DEBUG_PROCESSOR_CAN_WRITE_MEMORY
+      }
+   };
+   size_t count;
+
+   if (!out || cap == 0) {
+      return 0;
+   }
+   count = sizeof(processors) / sizeof(processors[0]);
+   if (count > cap) {
+      count = cap;
+   }
+   memcpy(out, processors, count * sizeof(processors[0]));
+   return count;
+}
+
+RETRO_API size_t e9k_debug_read_processor_regs(uint32_t processor_id, e9k_debug_processor_reg_t *out, size_t cap)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         return e9k_debug_read_m68k_processor_regs(out, cap);
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         return mega_z80_debug_read_regs(out, cap);
+      default:
+         return 0;
+   }
+}
+
 RETRO_API size_t e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
 {
 #ifdef EMU_M68K
@@ -1053,6 +1203,18 @@ RETRO_API size_t e9k_debug_read_memory(uint32_t addr, uint8_t *out, size_t cap)
    (void)cap;
    return 0;
 #endif
+}
+
+RETRO_API size_t e9k_debug_read_processor_memory(uint32_t processor_id, uint32_t addr, uint8_t *out, size_t cap)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         return e9k_debug_read_memory(addr, out, cap);
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         return mega_z80_debug_read_memory(addr, out, cap);
+      default:
+         return 0;
+   }
 }
 
 RETRO_API int e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
@@ -1083,6 +1245,18 @@ RETRO_API int e9k_debug_write_memory(uint32_t addr, uint32_t value, size_t size)
    (void)size;
    return 0;
 #endif
+}
+
+RETRO_API int e9k_debug_write_processor_memory(uint32_t processor_id, uint32_t addr, uint32_t value, size_t size)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         return e9k_debug_write_memory(addr, value, size);
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         return mega_z80_debug_write_memory(addr, value, size);
+      default:
+         return 0;
+   }
 }
 
 RETRO_API size_t e9k_debug_megadrive_get_sprite_state(e9k_debug_mega_sprite_state_t *out, size_t cap)
@@ -1374,6 +1548,47 @@ RETRO_API size_t e9k_debug_disassemble_quick(uint32_t pc, char *out, size_t cap)
    out[0] = '\0';
    return 0;
 #endif
+}
+
+RETRO_API size_t e9k_debug_disassemble_processor_quick(uint32_t processor_id, uint32_t pc, char *out, size_t cap)
+{
+   if (!out || cap == 0) {
+      return 0;
+   }
+   if (processor_id == E9K_DEBUG_MEGA_PROCESSOR_68K) {
+      return e9k_debug_disassemble_quick(pc, out, cap);
+   }
+   if (processor_id == E9K_DEBUG_MEGA_PROCESSOR_Z80) {
+      return mega_z80_debug_disassemble(pc, out, cap);
+   }
+   out[0] = '\0';
+   return 0;
+}
+
+RETRO_API int e9k_debug_suppress_processor_breakpoint_at_pc(uint32_t processor_id)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         return 1;
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         mega_z80_debug_suppress_breakpoint_at_pc();
+         return 1;
+      default:
+         return 0;
+   }
+}
+
+RETRO_API int e9k_debug_step_processor_instr(uint32_t processor_id)
+{
+   switch (processor_id) {
+      case E9K_DEBUG_MEGA_PROCESSOR_68K:
+         e9k_debug_step_instr();
+         return 1;
+      case E9K_DEBUG_MEGA_PROCESSOR_Z80:
+         return mega_z80_debug_step_instruction();
+      default:
+         return 0;
+   }
 }
 
 RETRO_API void e9k_debug_set_source_location_resolver(int (*resolver)(uint32_t pc24, uint64_t *out_location, void *user), void *user)
@@ -1871,10 +2086,6 @@ void *plat_mmap(unsigned long addr, size_t size, int need_exec, int is_fixed)
    }
 
    if (addr != 0 && ret != (void *)(uintptr_t)addr) {
-      if (log_cb)
-         log_cb(RETRO_LOG_WARN, "warning: wanted to map @%08lx, got %p\n",
-               addr, ret);
-
       if (is_fixed) {
          munmap(ret, size);
          return NULL;

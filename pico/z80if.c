@@ -9,9 +9,19 @@
 #include <stddef.h>
 #include "pico_int.h"
 #include "memory.h"
+#include "../../e9k-lib/e9k-lib.h"
+#include "../../e9k-lib/e9k-z80-dasm.h"
 
 uptr z80_read_map [0x10000 >> Z80_MEM_SHIFT];
 uptr z80_write_map[0x10000 >> Z80_MEM_SHIFT];
+static u8 mega_z80_debug_breakpoints[0x10000 / 8];
+static size_t mega_z80_debug_breakpoint_count;
+static u16 mega_z80_debug_suppressed_breakpoint_addr;
+static int mega_z80_debug_suppressed_breakpoint_active;
+static int mega_z80_debug_step_pending;
+
+extern void e9k_debug_pause(void);
+extern void e9k_debug_resume(void);
 
 u32 z80_read(u32 a)
 {
@@ -107,6 +117,8 @@ void z80_init(void)
 void z80_reset(void)
 {
   int is_sms = (PicoIn.AHW & (PAHW_SMS|PAHW_SG|PAHW_SC)) == PAHW_SMS;
+  mega_z80_debug_suppressed_breakpoint_active = 0;
+  mega_z80_debug_step_pending = 0;
 #ifdef _USE_DRZ80
   drZ80.Z80I = 0;
   drZ80.Z80IM = 0;
@@ -301,6 +313,276 @@ void z80_debug(char *dstr)
 #elif defined(_USE_CZ80)
   sprintf(dstr, "Z80 state: PC: %04x SP: %04x\n", (unsigned int)(CZ80.PC - CZ80.BasePC), CZ80.SP.W);
 #endif
+}
+
+static int
+mega_z80_debug_has_breakpoint(u16 addr)
+{
+  return (mega_z80_debug_breakpoints[addr >> 3] & (u8)(1u << (addr & 7u))) ? 1 : 0;
+}
+
+static int
+mega_z80_debug_active(void)
+{
+  return mega_z80_debug_breakpoint_count > 0 ||
+    mega_z80_debug_suppressed_breakpoint_active ||
+    mega_z80_debug_step_pending;
+}
+
+static int
+mega_z80_debug_break_if_needed(void)
+{
+  u16 pc = (u16)z80_pc();
+
+  if (mega_z80_debug_suppressed_breakpoint_active) {
+    if (mega_z80_debug_suppressed_breakpoint_addr == pc) {
+      mega_z80_debug_suppressed_breakpoint_active = 0;
+      return 0;
+    }
+    mega_z80_debug_suppressed_breakpoint_active = 0;
+  }
+  if (!mega_z80_debug_has_breakpoint(pc)) {
+    return 0;
+  }
+  mega_z80_debug_suppressed_breakpoint_addr = pc;
+  mega_z80_debug_suppressed_breakpoint_active = 1;
+  e9k_debug_pause();
+  return 1;
+}
+
+int
+mega_z80_debug_run(int cycles)
+{
+  int done = 0;
+
+  if (cycles <= 0) {
+    return 0;
+  }
+  if (!mega_z80_debug_active()) {
+    return z80_run(cycles);
+  }
+
+  while (done < cycles) {
+    int ran;
+
+    if (!mega_z80_debug_step_pending && mega_z80_debug_break_if_needed()) {
+      break;
+    }
+    ran = z80_run(1);
+    if (ran <= 0) {
+      if (mega_z80_debug_step_pending) {
+        mega_z80_debug_step_pending = 0;
+        e9k_debug_pause();
+      }
+      break;
+    }
+    done += ran;
+    if (mega_z80_debug_step_pending) {
+      mega_z80_debug_step_pending = 0;
+      e9k_debug_pause();
+      break;
+    }
+  }
+
+  return done;
+}
+
+static void
+mega_z80_debug_set_reg(e9k_debug_processor_reg_t *reg, const char *name, u32 value, u8 bits)
+{
+  memset(reg, 0, sizeof(*reg));
+  strncpy(reg->name, name, sizeof(reg->name) - 1);
+  reg->value = value;
+  reg->bits = bits;
+}
+
+static u16
+mega_z80_debug_pair(u8 hi, u8 lo)
+{
+  return (u16)(((u16)hi << 8) | lo);
+}
+
+size_t
+mega_z80_debug_read_regs(e9k_debug_processor_reg_t *out, size_t cap)
+{
+  enum { reg_count = 19 };
+  struct z80_state state;
+  size_t count;
+  size_t i = 0;
+
+  if (!out || cap == 0) {
+    return 0;
+  }
+
+  z80_pack(&state);
+  count = reg_count;
+  if (count > cap) {
+    count = cap;
+  }
+
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "AF", mega_z80_debug_pair(state.m.a, state.m.f), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "BC", mega_z80_debug_pair(state.m.b, state.m.c), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "DE", mega_z80_debug_pair(state.m.d, state.m.e), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "HL", mega_z80_debug_pair(state.m.h, state.m.l), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "AF'", mega_z80_debug_pair(state.a.a, state.a.f), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "BC'", mega_z80_debug_pair(state.a.b, state.a.c), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "DE'", mega_z80_debug_pair(state.a.d, state.a.e), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "HL'", mega_z80_debug_pair(state.a.h, state.a.l), 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "IX", state.ix, 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "IY", state.iy, 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "SP", state.sp, 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "PC", state.pc, 16);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "I", state.i, 8);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "R", state.r, 8);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "IM", state.im, 8);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "IFF1", state.iff1 ? 1u : 0u, 1);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "IFF2", state.iff2 ? 1u : 0u, 1);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "HALT", state.halted ? 1u : 0u, 1);
+  }
+  if (i < count) {
+    mega_z80_debug_set_reg(&out[i++], "BANK68K", Pico.m.z80_bank68k << 15, 24);
+  }
+
+  return count;
+}
+
+size_t
+mega_z80_debug_read_memory(u32 addr, u8 *out, size_t cap)
+{
+  size_t i;
+
+  if (!out || cap == 0) {
+    return 0;
+  }
+  for (i = 0; i < cap; ++i) {
+    out[i] = (u8)z80_read(addr + (u32)i);
+  }
+  return cap;
+}
+
+int
+mega_z80_debug_write_memory(u32 addr, u32 value, size_t size)
+{
+  u16 addr16;
+
+  if (size != 1) {
+    return 0;
+  }
+  addr16 = (u16)addr;
+  if (addr16 >= 0x4000u) {
+    return 0;
+  }
+  PicoMem.zram[addr16 & 0x1fffu] = (u8)(value & 0xffu);
+  return 1;
+}
+
+size_t
+mega_z80_debug_disassemble(u32 pc, char *out, size_t cap)
+{
+  u8 bytes[4];
+  size_t i;
+
+  if (!out || cap == 0) {
+    return 0;
+  }
+  for (i = 0; i < sizeof(bytes); ++i) {
+    bytes[i] = (u8)z80_read(pc + (u32)i);
+  }
+  return e9k_z80_dasmDisassemble(bytes, pc, out, cap);
+}
+
+void
+mega_z80_debug_add_breakpoint(u32 addr)
+{
+  u16 addr16 = (u16)addr;
+
+  if (mega_z80_debug_has_breakpoint(addr16)) {
+    return;
+  }
+  mega_z80_debug_breakpoints[addr16 >> 3] |= (u8)(1u << (addr16 & 7u));
+  mega_z80_debug_breakpoint_count++;
+}
+
+void
+mega_z80_debug_remove_breakpoint(u32 addr)
+{
+  u16 addr16 = (u16)addr;
+
+  if (!mega_z80_debug_has_breakpoint(addr16)) {
+    return;
+  }
+  mega_z80_debug_breakpoints[addr16 >> 3] &= (u8)~(u8)(1u << (addr16 & 7u));
+  if (mega_z80_debug_breakpoint_count > 0) {
+    mega_z80_debug_breakpoint_count--;
+  }
+  if (mega_z80_debug_suppressed_breakpoint_active &&
+      mega_z80_debug_suppressed_breakpoint_addr == addr16) {
+    mega_z80_debug_suppressed_breakpoint_active = 0;
+  }
+}
+
+void
+mega_z80_debug_suppress_breakpoint_at_pc(void)
+{
+  u16 pc = (u16)z80_pc();
+
+  if (!mega_z80_debug_has_breakpoint(pc)) {
+    return;
+  }
+  mega_z80_debug_suppressed_breakpoint_addr = pc;
+  mega_z80_debug_suppressed_breakpoint_active = 1;
+}
+
+int
+mega_z80_debug_step_instruction(void)
+{
+  mega_z80_debug_step_pending = 1;
+  e9k_debug_resume();
+  return 1;
+}
+
+void
+mega_z80_debug_reset(void)
+{
+  memset(mega_z80_debug_breakpoints, 0, sizeof(mega_z80_debug_breakpoints));
+  mega_z80_debug_breakpoint_count = 0;
+  mega_z80_debug_suppressed_breakpoint_active = 0;
+  mega_z80_debug_step_pending = 0;
 }
 
 // vim:ts=2:sw=2:expandtab
