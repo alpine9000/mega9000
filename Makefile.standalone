@@ -260,7 +260,7 @@ USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "libretro"
 OBJS += platform/libretro/libretro.o
-OBJS += ../e9k-lib/e9k-z80-dasm.o
+OBJS += e9k-lib/e9k-z80-dasm.o
 ifneq ($(STATIC_LINKING), 1)
 CFLAGS += -DHAVE_ZLIB
 OBJS += platform/libretro/libretro-common/formats/png/rpng.o
@@ -455,6 +455,10 @@ pico/pico_int_offs.h: tools/mkoffsets.sh
 	$(MAKE) -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS) -UUSE_LIBRETRO_VFS" XPLATFORM="$(platform)"
 
 $(call objpath,%.o): %.c
+	@mkdir -p $(dir $@)
+	$(CC) -c $(OBJOUT)$@ $< $(CFLAGS)
+
+$(call objpath,e9k-lib/%.o): ../e9k-lib/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(OBJOUT)$@ $< $(CFLAGS)
 
