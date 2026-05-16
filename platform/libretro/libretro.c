@@ -3273,6 +3273,7 @@ bool retro_load_game(const struct retro_game_info *info)
 
    make_system_path(carthw_path, sizeof(carthw_path), "carthw", ".cfg");
 
+   srand(1);
    media_type = PicoLoadMedia(content_path, content_data, content_size,
          carthw_path, find_bios, find_msu, NULL);
 
@@ -3437,6 +3438,7 @@ void retro_reset(void)
 {
    e9k_debug_reset_state();
    e9k_debug_megadrive_clear_palette_greyscale();
+   srand(1);
    PicoReset();
 }
 
@@ -4101,9 +4103,6 @@ void retro_run(void)
    }
 
    PicoFrame();
-   if (e9k_debug_vblank_cb) {
-      e9k_debug_vblank_cb(e9k_debug_vblank_user);
-   }
 
    /* Check whether frontend needs to be notified
     * of timing/geometry changes */
@@ -4122,6 +4121,9 @@ void retro_run(void)
     * a NULL buffer and return immediately */
    if (PicoIn.skipFrame) {
       video_cb(NULL, vout_width, vout_height, vout_width * 2);
+      if (e9k_debug_vblank_cb) {
+         e9k_debug_vblank_cb(e9k_debug_vblank_user);
+      }
       return;
    }
 
@@ -4231,6 +4233,9 @@ void retro_run(void)
 #endif
 
    video_cb((short *)buff, vout_width, vout_height, vout_width * 2);
+   if (e9k_debug_vblank_cb) {
+      e9k_debug_vblank_cb(e9k_debug_vblank_user);
+   }
 }
 
 void retro_init(void)
