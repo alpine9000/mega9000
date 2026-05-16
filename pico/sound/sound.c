@@ -16,6 +16,7 @@
 #include "../cd/megasd.h"
 #include "resampler.h"
 #include "mix.h"
+#include "audio_vis.h"
 
 #define YM2612_CH6PAN   0x1b6   // panning register for channel 6 (used for DAC)
 
@@ -24,6 +25,7 @@ void (*PsndMix_32_to_16)(s16 *dest, s32 *src, int count) = mix_32_to_16_stereo;
 // master int buffer to mix to
 // +1 for a fill triggered by an instruction overhanging into the next scanline
 static s32 PsndBuffer[2*(54000+100)/50+2];
+static s16 PsndPsgVisBuffer[2*(54000+100)/50+2];
 
 // cdda output buffer
 s16 cdda_out_buffer[2*1152];
@@ -32,6 +34,41 @@ s16 cdda_out_buffer[2*1152];
 static resampler_t *ym2612_resampler;
 static resampler_t *ym2413_resampler;
 static int (*PsndFMUpdate)(s32 *buffer, int length, int stereo, int is_buf_empty);
+
+static void PsndRenderPSG(s16 *dest, int length, int stereo, int muted)
+{
+  int i;
+  int samples = length << stereo;
+
+  if (!megadrive_audio_vis_is_enabled()) {
+    SN76496Update(dest, length, stereo);
+    return;
+  }
+
+  memset(PsndPsgVisBuffer, 0, samples * sizeof(PsndPsgVisBuffer[0]));
+  SN76496Update(PsndPsgVisBuffer, length, stereo);
+  megadrive_audio_vis_add_s16(PSND_AUDIO_VIS_SOURCE_PSG, PsndPsgVisBuffer, length, stereo);
+  if (muted) {
+    return;
+  }
+  for (i = 0; i < samples; i++) {
+    dest[i] += PsndPsgVisBuffer[i];
+  }
+}
+
+static void PsndUpdateFM(s32 *dest, int length, int stereo, int muted)
+{
+  if (!(PicoIn.opt & POPT_EN_FM)) {
+    memset32(dest, 0, length << stereo);
+    return;
+  }
+
+  PsndFMUpdate(dest, length, stereo, 1);
+  megadrive_audio_vis_add_s32(PSND_AUDIO_VIS_SOURCE_FM, dest, length, stereo);
+  if (muted) {
+    memset32(dest, 0, length << stereo);
+  }
+}
 
 PICO_INTERNAL void PsndInit(void)
 {
@@ -257,13 +294,33 @@ PICO_INTERNAL void PsndDoDAC(int cyc_to)
     int pan = ym2612.REGS[YM2612_CH6PAN];
     int l = pan & 0x80 ? Pico.snd.dac_val : 0;
     int r = pan & 0x40 ? Pico.snd.dac_val : 0;
-    *d++ += pan & 0x80 ? Pico.snd.dac_val2 : 0;
-    *d++ += pan & 0x40 ? Pico.snd.dac_val2 : 0;
-    while (--len) *d++ += l, *d++ += r;
+    int muted = megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_DAC;
+    if (!muted) {
+      *d++ += pan & 0x80 ? Pico.snd.dac_val2 : 0;
+      *d++ += pan & 0x40 ? Pico.snd.dac_val2 : 0;
+    }
+    megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC,
+      pan & 0x80 ? Pico.snd.dac_val2 : 0,
+      pan & 0x40 ? Pico.snd.dac_val2 : 0);
+    while (--len) {
+      if (!muted) {
+        *d++ += l, *d++ += r;
+      }
+      megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, l, r);
+    }
   } else {
     s16 *d = PicoIn.sndOut + pos;
-    *d++ += Pico.snd.dac_val2;
-    while (--len) *d++ += Pico.snd.dac_val;
+    int muted = megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_DAC;
+    if (!muted) {
+      *d++ += Pico.snd.dac_val2;
+    }
+    megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, Pico.snd.dac_val2, Pico.snd.dac_val2);
+    while (--len) {
+      if (!muted) {
+        *d++ += Pico.snd.dac_val;
+      }
+      megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, Pico.snd.dac_val, Pico.snd.dac_val);
+    }
   }
   Pico.snd.dac_val2 = (Pico.snd.dac_val + dout) >> 1;
   Pico.snd.dac_val = dout;
@@ -294,7 +351,8 @@ PICO_INTERNAL void PsndDoPSG(int cyc_to)
     stereo = 1;
     pos <<= 1;
   }
-  SN76496Update(PicoIn.sndOut + pos, len, stereo);
+  PsndRenderPSG(PicoIn.sndOut + pos, len, stereo,
+                  megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_PSG);
 }
 
 PICO_INTERNAL void PsndDoSMSFM(int cyc_to)
@@ -328,7 +386,7 @@ PICO_INTERNAL void PsndDoSMSFM(int cyc_to)
   if (Pico.m.hardware & PMS_HW_FMUSED) {
     buf += pos;
     YM2413UpdateFIR(buf32, len, 0, 0);
-    if (stereo) 
+    if (stereo)
       while (len--) {
         *buf++ += *buf32;
         *buf++ += *buf32++;
@@ -363,8 +421,8 @@ PICO_INTERNAL void PsndDoFM(int cyc_to)
     stereo = 1;
     pos <<= 1;
   }
-  if (PicoIn.opt & POPT_EN_FM)
-    PsndFMUpdate(PsndBuffer + pos, len, stereo, 1);
+  PsndUpdateFM(PsndBuffer + pos, len, stereo,
+                 megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_FM);
 }
 
 PICO_INTERNAL void PsndDoPCM(int cyc_to)
@@ -501,8 +559,10 @@ static int PsndRender(int offset, int length)
   if (length-psglen > 0 && PicoIn.sndOut) {
     s16 *psgbuf = PicoIn.sndOut + (psglen << stereo);
     Pico.snd.psg_pos += (length-psglen) << 20;
-    if (PicoIn.opt & POPT_EN_PSG)
-      SN76496Update(psgbuf, length-psglen, stereo);
+    if (PicoIn.opt & POPT_EN_PSG) {
+      PsndRenderPSG(psgbuf, length-psglen, stereo,
+                      megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_PSG);
+    }
   }
 
   if (PicoIn.AHW & PAHW_PICO) {
@@ -520,15 +580,37 @@ static int PsndRender(int offset, int length)
       int pan = ym2612.REGS[YM2612_CH6PAN];
       int l = pan & 0x80 ? Pico.snd.dac_val : 0;
       int r = pan & 0x40 ? Pico.snd.dac_val : 0;
-      *d++ += pan & 0x80 ? Pico.snd.dac_val2 : 0;
-      *d++ += pan & 0x40 ? Pico.snd.dac_val2 : 0;
-      if (l|r) for (daclen++; length-daclen > 0; daclen++)
-          *d++ += l, *d++ += r;
+      int muted = megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_DAC;
+      if (!muted) {
+        *d++ += pan & 0x80 ? Pico.snd.dac_val2 : 0;
+        *d++ += pan & 0x40 ? Pico.snd.dac_val2 : 0;
+      }
+      megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC,
+        pan & 0x80 ? Pico.snd.dac_val2 : 0,
+        pan & 0x40 ? Pico.snd.dac_val2 : 0);
+      if (l | r) {
+        for (daclen++; length-daclen > 0; daclen++) {
+          if (!muted) {
+            *d++ += l, *d++ += r;
+          }
+          megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, l, r);
+        }
+      }
     } else {
       s16 *d = PicoIn.sndOut + daclen;
-      *d++ += Pico.snd.dac_val2;
-      if (Pico.snd.dac_val) for (daclen++; length-daclen > 0; daclen++)
-        *d++ += Pico.snd.dac_val;
+      int muted = megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_DAC;
+      if (!muted) {
+        *d++ += Pico.snd.dac_val2;
+      }
+      megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, Pico.snd.dac_val2, Pico.snd.dac_val2);
+      if (Pico.snd.dac_val) {
+        for (daclen++; length-daclen > 0; daclen++) {
+          if (!muted) {
+            *d++ += Pico.snd.dac_val;
+          }
+          megadrive_audio_vis_add_pair(PSND_AUDIO_VIS_SOURCE_DAC, Pico.snd.dac_val, Pico.snd.dac_val);
+        }
+      }
     }
     Pico.snd.dac_val2 = Pico.snd.dac_val;
   }
@@ -537,8 +619,8 @@ static int PsndRender(int offset, int length)
   if (length-fmlen > 0 && PicoIn.sndOut) {
     s32 *fmbuf = buf32 + ((fmlen-offset) << stereo);
     Pico.snd.fm_pos += (length-fmlen) << 20;
-    if (PicoIn.opt & POPT_EN_FM)
-      PsndFMUpdate(fmbuf, length-fmlen, stereo, 1);
+    PsndUpdateFM(fmbuf, length-fmlen, stereo,
+                   megadrive_audio_vis_mute_mask() & PSND_AUDIO_VIS_MUTE_FM);
   }
 
   // CD: PCM sound

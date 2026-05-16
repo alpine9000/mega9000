@@ -81,6 +81,7 @@ static uint64_t page_table[2] = {0, 0};
 #include <pico/pico_int.h>
 #include <pico/state.h>
 #include <pico/patch.h>
+#include <pico/sound/audio_vis.h>
 #include <pico/sound/mix.h>
 #include "../common/input_pico.h"
 #include "../common/version.h"
@@ -500,6 +501,16 @@ static int vout_width, vout_height, vout_offset;
 static float vout_aspect = 0.0;
 static int vout_ghosting = 0;
 static uint32_t e9k_debug_megadrive_palette_greyscale_mask = 0u;
+static int megadrive_audio_vis_enabled = 0;
+static uint32_t megadrive_audio_mute_mask = 0u;
+static uint64_t megadrive_audio_frame_no = 0u;
+static e9k_debug_mega_audio_frame_t megadrive_audio_frame;
+typedef char megadrive_audio_vis_mute_fm_match[
+      (PSND_AUDIO_VIS_MUTE_FM == E9K_DEBUG_MEGA_AUDIO_MUTE_FM) ? 1 : -1];
+typedef char megadrive_audio_vis_mute_psg_match[
+      (PSND_AUDIO_VIS_MUTE_PSG == E9K_DEBUG_MEGA_AUDIO_MUTE_PSG) ? 1 : -1];
+typedef char megadrive_audio_vis_mute_dac_match[
+      (PSND_AUDIO_VIS_MUTE_DAC == E9K_DEBUG_MEGA_AUDIO_MUTE_DAC) ? 1 : -1];
 
 static bool libretro_update_av_info = false;
 static bool libretro_update_geometry = false;
@@ -574,6 +585,156 @@ RETRO_API void e9k_debug_megadrive_set_palette_greyscale_mask(uint32_t mask)
 RETRO_API uint32_t e9k_debug_megadrive_get_palette_greyscale_mask(void)
 {
    return e9k_debug_megadrive_palette_greyscale_mask;
+}
+
+static int32_t megadrive_audio_vis_peak_abs32(int64_t value)
+{
+   if (value < 0) {
+      value = -value;
+   }
+   if (value > 32768) {
+      value = 32768;
+   }
+   return (int32_t)value;
+}
+
+static e9k_debug_mega_audio_source_t *megadrive_audio_vis_source(psnd_audio_vis_source_t source)
+{
+   switch (source) {
+   case PSND_AUDIO_VIS_SOURCE_FM:
+      return &megadrive_audio_frame.fm;
+   case PSND_AUDIO_VIS_SOURCE_PSG:
+      return &megadrive_audio_frame.psg;
+   case PSND_AUDIO_VIS_SOURCE_DAC:
+      return &megadrive_audio_frame.dac;
+   case PSND_AUDIO_VIS_SOURCE_MIXED:
+      return &megadrive_audio_frame.mixed;
+   default:
+      break;
+   }
+   return NULL;
+}
+
+static void megadrive_audio_vis_reset_frame(void)
+{
+   memset(&megadrive_audio_frame, 0, sizeof(megadrive_audio_frame));
+}
+
+void megadrive_audio_vis_add_s16(psnd_audio_vis_source_t source, const int16_t *data, size_t frames, int stereo)
+{
+   e9k_debug_mega_audio_source_t *dst;
+   size_t i;
+
+   if (!megadrive_audio_vis_enabled || !data || frames == 0u) {
+      return;
+   }
+
+   dst = megadrive_audio_vis_source(source);
+   if (!dst) {
+      return;
+   }
+
+   for (i = 0u; i < frames; ++i) {
+      int32_t left = stereo ? data[i * 2u] : data[i];
+      int32_t right = stereo ? data[i * 2u + 1u] : left;
+      int32_t peakL = megadrive_audio_vis_peak_abs32(left);
+      int32_t peakR = megadrive_audio_vis_peak_abs32(right);
+      if (peakL > dst->peakL) {
+         dst->peakL = peakL;
+      }
+      if (peakR > dst->peakR) {
+         dst->peakR = peakR;
+      }
+   }
+}
+
+void megadrive_audio_vis_add_pair(psnd_audio_vis_source_t source, int32_t left, int32_t right)
+{
+   e9k_debug_mega_audio_source_t *dst;
+   int32_t peakL;
+   int32_t peakR;
+
+   if (!megadrive_audio_vis_enabled) {
+      return;
+   }
+
+   dst = megadrive_audio_vis_source(source);
+   if (!dst) {
+      return;
+   }
+
+   peakL = megadrive_audio_vis_peak_abs32(left);
+   peakR = megadrive_audio_vis_peak_abs32(right);
+   if (peakL > dst->peakL) {
+      dst->peakL = peakL;
+   }
+   if (peakR > dst->peakR) {
+      dst->peakR = peakR;
+   }
+}
+
+void megadrive_audio_vis_add_s32(psnd_audio_vis_source_t source, const int32_t *data, size_t frames, int stereo)
+{
+   e9k_debug_mega_audio_source_t *dst;
+   size_t i;
+
+   if (!megadrive_audio_vis_enabled || !data || frames == 0u) {
+      return;
+   }
+
+   dst = megadrive_audio_vis_source(source);
+   if (!dst) {
+      return;
+   }
+
+   for (i = 0u; i < frames; ++i) {
+      int32_t left = stereo ? data[i * 2u] : data[i];
+      int32_t right = stereo ? data[i * 2u + 1u] : left;
+      int32_t peakL = megadrive_audio_vis_peak_abs32(left);
+      int32_t peakR = megadrive_audio_vis_peak_abs32(right);
+      if (peakL > dst->peakL) {
+         dst->peakL = peakL;
+      }
+      if (peakR > dst->peakR) {
+         dst->peakR = peakR;
+      }
+   }
+}
+
+int megadrive_audio_vis_is_enabled(void)
+{
+   return megadrive_audio_vis_enabled;
+}
+
+uint32_t megadrive_audio_vis_mute_mask(void)
+{
+   return megadrive_audio_vis_enabled ? megadrive_audio_mute_mask : 0u;
+}
+
+RETRO_API void e9k_debug_megadrive_set_audio_vis_enabled(int enabled)
+{
+   megadrive_audio_vis_enabled = enabled ? 1 : 0;
+   if (!megadrive_audio_vis_enabled) {
+      megadrive_audio_mute_mask = 0u;
+   }
+   megadrive_audio_frame_no = 0u;
+   megadrive_audio_vis_reset_frame();
+}
+
+RETRO_API void e9k_debug_megadrive_set_audio_mute_mask(uint32_t mask)
+{
+   megadrive_audio_mute_mask = megadrive_audio_vis_enabled ? mask : 0u;
+}
+
+RETRO_API size_t e9k_debug_megadrive_get_audio_frame(e9k_debug_mega_audio_frame_t *out, size_t cap)
+{
+   if (!out || cap < sizeof(*out) || !megadrive_audio_vis_enabled) {
+      return 0u;
+   }
+   megadrive_audio_frame.frameNo = megadrive_audio_frame_no++;
+   *out = megadrive_audio_frame;
+   megadrive_audio_vis_reset_frame();
+   return sizeof(*out);
 }
 
 RETRO_API void e9k_debug_set_vblank_callback(void (*cb)(void *), void *user)
@@ -3462,6 +3623,10 @@ static int has_4_pads;
 
 static void snd_write(int len)
 {
+   megadrive_audio_vis_add_s16(PSND_AUDIO_VIS_SOURCE_MIXED,
+         PicoIn.sndOut,
+         (size_t)(len / ((PicoIn.opt & POPT_EN_STEREO) ? 4 : 2)),
+         (PicoIn.opt & POPT_EN_STEREO) ? 1 : 0);
    audio_batch_cb(PicoIn.sndOut, len / 4);
 }
 
